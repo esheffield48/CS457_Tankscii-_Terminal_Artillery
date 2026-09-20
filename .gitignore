@@ -1,0 +1,51 @@
+# ==========================================
+# Python
+# ==========================================
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.venv/
+venv/
+ENV/
+env/
+*.egg-info/
+.pytest_cache/
+
+# ==========================================
+# VS Code / Editors
+# ==========================================
+.vscode/*
+!.vscode/settings.json
+!.vscode/tasks.json
+!.vscode/launch.json
+!.vscode/extensions.json
+*.swp
+*~
+
+# ==========================================
+# Cisco Modeling Labs (CML) & Packet Traces
+# ==========================================
+# Network packet captures & logs
+*.pcap
+*.pcapng
+*.cap
+*.log
+
+# CML node state, runtime exports & temporary topologies
+*.virl
+*.virl2
+tmp/
+*.tmp
+
+# ==========================================
+# Operating System & Environment
+# ==========================================
+.DS_Store
+.DS_Store?
+._*
+.Spotlight-V100
+.Trashes
+ehthumbs.db
+Thumbs.db
+.env
