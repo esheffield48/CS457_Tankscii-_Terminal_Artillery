@@ -124,12 +124,20 @@ stateDiagram-v2
 ## 3. Game Behavior & Server Concurrency Architecture (Sprint 2 Deliverable)
 
 ### 3.1 Server Concurrency Strategy
-- **Architecture Choice:** [Multi-Threading (`threading.Thread`) OR Non-blocking I/O multiplexing (`select.select` / `selectors`)]
-- **Synchronization Logic:** Explain how shared game state and client list are thread-safe (e.g. `threading.Lock`) to prevent race conditions during turn processing.
+- **Architecture Choice :** 
+  - Single-threaded non-blocking I/O multiplexing using Python's `selectors` (`selectors.DefaultSelector` / `select.select`).
+  - The server registers the non-blocking listening socket (`EVENT_READ`, `data=None`) and up to 2 connected client sockets (`EVENT_READ`, `data=ClientSession`) within a single deterministic event loop, using dynamic `sel.select(timeout)` intervals to drive the 30-second turn timer (`time.monotonic()`).
+- **Synchronization Logic :** 
+  - **Event-Driven State Isolation :** Because all socket reads, frame extractions (`stream_buffer`), physics calculations, and state transitions execute sequentially on a single thread, shared resources (`fsm_state`, `clients`, `board_matrix`, `tanks`, `active_turn`, `round`, `final_scores`) are mutated atomically to completion without concurrent data races or deadlocks.
+  - **Broadcast Safety :** Outbound broadcasts iterate over a static snapshot of `clients` (`list(clients.items())`) with per-socket `try/except (ConnectionResetError, BrokenPipeError, TimeoutError, OSError)` blocks, deferring socket unregistration (`sel.unregister`) and teardown until the broadcast completes.
 
 ### 3.2 State & Score Synchronization Across Clients
-- **Turn Enforcement:** Detail how the server validates active player ID before processing moves and broadcasts updated turn notifications to all clients.
-- **Score & Board Synchronization:** Describe how state broadcasts keep client screens synchronized in real time.
+- **Turn Enforcement :** 
+  - Before mutating state in `PLAYER_TURN`, the server verifies `player_id == active_turn`. Out-of-turn commands from the waiting client are rejected immediately with `ERROR` (`error_code: "OUT_OF_TURN"`, `retry_allowed: false`) without interrupting the active player's turn or 30-second timer.
+  - Invalid move/fire parameters or duplicate moves in the same turn return `ERROR` (`"INVALID_PARAMS"` or `"MOVE_ALREADY_USED"`, `retry_allowed: true`) to the active player.
+- **Score & Board Synchronization :** 
+  - Following every valid `MOVE`, `FIRE`, or 30-second `TIMEOUT`, the server synchronously broadcasts a `STATE_UPDATE` frame to both clients containing the current `round`, `tanks` coordinates/HP, `move_path` or projectile `trajectory`/`impact`, `damage_dealt`, `craters`, `next_turn`, and `time_remaining`.
+  - When a tank reaches `0 HP` or Round 20 concludes, the server broadcasts the final `STATE_UPDATE` followed immediately by `GAME_OVER` (`winner`, `reason`, `final_scores`) to synchronize the final leaderboard across both clients.
 
 ---
 

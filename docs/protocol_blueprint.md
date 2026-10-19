@@ -5,7 +5,7 @@
 **Course :** CS 457 - Computer Networks  
 **Target Server Domain :** `server.sheffield.edu`
 
-## 1 Transport Layer & Packet Framing Mechanism
+## 1. Transport Layer & Packet Framing Mechanism
 
 ### 1.1 Transport Protocol : 
 ---
@@ -16,9 +16,9 @@
 - **Newline-Delimited JSON :** `\n` (`0x0A`)
 - **Framing Rule :** Every JSON object is UTF-8 encoded and terminated by a newline character `\n` (`0x0A`).
 - **Receiver Extraction Logic :**
-  A receiver accumulates incoming bytes into a stream buffer and When a `\n` is encountered, the complete line is extracted and trailing data remains in the buffer. Once a message has been extracted from the stream buffer, it is deserialzed into a JSON object. 
+  Each client session accumulates incoming non-blocking `recv(4096)` bytes into a per-client `stream_buffer` (`bytearray`). While a `\n` delimiter is present in `stream_buffer`, each complete UTF-8 line is extracted and deserialized into a JSON object, while any trailing partial frame bytes remain buffered until the next readable socket event.
 
-## 2 Application Message Schema :
+## 2. Application Message Schema :
 
 ### 2.1 Message Framing Structure : 
 ---
@@ -39,12 +39,12 @@
 | Message (`msg_type`) | Direction | Description |
 | :--- | :--- | :--- |
 | `CONNECT` | Client -> Server | Client requests to join game room with player nickname. |
-| `LOBBY_WAIT` | Server -> Client | Server notifies Client 1 that is is waiting for Player 2 to connect. |
-| `GAME_START` | Server -> Clients | Server notifies both clients that the game has started, assisgns player roles, and spawns the map and tanks. |
-| `MOVE` | Client -> Server | Active player submits move direction and distance value(optional). |
+| `LOBBY_WAIT` | Server -> Client | Server notifies Client 1 that it is waiting for Player 2 to connect. |
+| `GAME_START` | Server -> Clients | Server notifies both clients that the game has started, assigns player roles, and spawns the map and tanks. |
+| `MOVE` | Client -> Server | Active player submits move direction and distance value (optional). |
 | `FIRE` | Client -> Server | Active player submits firing angle and power. |
 | `STATE_UPDATE` | Server -> Clients | Server broadcasts updated map state, players health, and active player turn. |
-| `ERROR` | Server -> Client | Server notifies client of out-of-turn move, invalid input values, or malformed messages. | 
+| `ERROR` | Server -> Client | Server notifies client of out-of-turn move, invalid input values, turn timeout, full lobby, or malformed messages. | 
 | `DISCONNECT` | Client -> Server | Client notifies server of intentional departure/quit. |
 | `GAME_OVER` | Server -> Clients | Server broadcasts final game outcome (Winner / Draw / Forfeit), number of rounds completed, and final health values. |
 
@@ -109,7 +109,7 @@
 | `move_path` | list | Coordinates traversed during movement | `[[x, y], ...]` (`null` on `"FIRE"`) |
 | `trajectory` | list | Path of the projectile | `[[x, y], ...]` (`null` on `"MOVE"`) |
 | `impact` | dict | Impact point & result | `{"coord": [x, y], "result": "HIT" or "MISS" or "GROUND"}` (`null` on `"MOVE"`) |
-| `damage_dealt` | int | HP damage inflicted on opponent | >= 0 (`0` on `"MOVE"`) |
+| `damage_dealt` | int | HP damage inflicted on opponent | `0`, `10` (shrapnel), or `25` (direct hit) |
 | `craters` | list | List of terrain craters | `[{"x": int, "radius": int}, ...]` (empty `[]` on `"MOVE"`) |
 | `next_turn` | str | Active player for next turn | `"Player_1"` or `"Player_2"` |
 | `time_remaining` | int | Turn countdown timer in seconds | 1–30 |
@@ -120,7 +120,7 @@
 
 | JSON Key | Type | Description | Constraints |
 | :--- | :--- | :--- | :--- |
-| `error_code` | str | Error category | `"OUT_OF_TURN"` or `"INVALID_PARAMS"` or `"MOVE_ALREADY_USED"` or `"TIMEOUT"` or `"MALFORMED_FRAME"` |
+| `error_code` | str | Error category | `"OUT_OF_TURN"` or `"INVALID_PARAMS"` or `"MOVE_ALREADY_USED"` or `"TIMEOUT"` or `"LOBBY_FULL"` or `"MALFORMED_FRAME"` |
 | `detail` | str | Human-readable explanation of rejection | Non-empty string |
 | `retry_allowed` | bool | Whether client may retry within remaining turn time | `true` or `false` |
 
@@ -156,7 +156,7 @@
 ### Continuous Stream Example :
 - **Server Actions : `STATE_UPDATE` and `GAME_OVER`**
 ```text
-{"msg_type":"STATE_UPDATE","player_id":"SERVER","timestamp":1727000010,"payload":{"round":5,"action":"FIRE","actor_id":"Player_1","tanks":{"Player_1":{"x":13,"y":6,"hp":100},"Player_2":{"x":70,"y":6,"hp":0}},"move_path":null,"trajectory":[[13,6],[25,15],[45,18],[70,6]],"impact":{"coord":[70,6],"result":"HIT"},"damage_dealt":35,"craters":[{"x":70,"radius":2}],"next_turn":"Player_2","time_remaining":30}}\n{"msg_type":"GAME_OVER","player_id":"SERVER","timestamp":1727000012,"payload":{"winner":"Player_1","reason":"HP_ELIMINATION","final_scores":{"Player_1_hp":100,"Player_2_hp":0,"rounds":5},"message":"Player_1 destroyed Player_2"}}\n
+{"msg_type":"STATE_UPDATE","player_id":"SERVER","timestamp":1727000010,"payload":{"round":5,"action":"FIRE","actor_id":"Player_1","tanks":{"Player_1":{"x":13,"y":6,"hp":100},"Player_2":{"x":70,"y":6,"hp":0}},"move_path":null,"trajectory":[[13,6],[25,15],[45,18],[70,6]],"impact":{"coord":[70,6],"result":"HIT"},"damage_dealt":25,"craters":[{"x":70,"radius":2}],"next_turn":"Player_2","time_remaining":30}}\n{"msg_type":"GAME_OVER","player_id":"SERVER","timestamp":1727000012,"payload":{"winner":"Player_1","reason":"HP_ELIMINATION","final_scores":{"Player_1_hp":100,"Player_2_hp":0,"rounds":5},"message":"Player_1 destroyed Player_2"}}\n
 ```
 
 ### JSON Schema Examples :
@@ -207,7 +207,7 @@
       "coord": [70, 6],
       "result": "HIT"
     },
-    "damage_dealt": 35,
+    "damage_dealt": 25,
     "craters": [
       {
         "x": 70,
@@ -222,19 +222,20 @@
 
 ---
 
-## 3 Connection Termination & Socket Lifecycle Management
+## 3. Connection Termination & Socket Lifecycle Management
 
 ### 3.1 Application-Layer Disconnect :
-- **Client Action :** Transmits a structured `DISCONNECT` frame and calls `sock.close()` to initiate the TCP FIN 4-way handshake.
-- **Server Action:** Receives `DISCONNECT`, sends a `GAME_OVER` packet declaring the opponent the winner by forfeit, releases socket resources, and closes the connection.
+- **Client Action :** Transmits a structured `DISCONNECT` frame (`reason: "FORFEIT"` or `"USER_QUIT"`) and calls `sock.close()` to initiate the TCP FIN 4-way handshake.
+- **Server Action :** Receives `DISCONNECT`, transitions to `GAME_OVER`, broadcasts a `GAME_OVER` frame (`reason: "FORFEIT"`) declaring the surviving opponent the winner, unregisters both sockets from `selectors` (`sel.unregister(sock)`), closes the connections (`sock.close()`), and resets match state in `CLEANUP` back to `WAITING_FOR_PLAYERS`.
 
-### 3.2 Abrupt Drop & Exception Handling:
-- All low-level socket operations are wrapped in `try/except` blocks catching:
+### 3.2 Abrupt Drop & Exception Handling :
+- All low-level socket `recv()` and `sendall()` operations are wrapped in `try/except` blocks catching:
   - `ConnectionResetError` (`TCP RST`) : A peer host forcibly closed the connection or crashed.
   - `BrokenPipeError` (`EPIPE`) : The application attempts to `sock.send()` or `sendall()` to a socket whose remote end is already closed.
-  - `TimeoutError` : (If a socket timeout is configured and the peer stops responding).
-- When an exception is caught, the server logs the abrupt disconnection and error, sends a `GAME_OVER` frame to the remaining client with `"reason":"DISCONNECT"`, releases socket resources, and closes the connection.
+  - `TimeoutError` / `OSError` : Socket timeout or underlying OS network error.
+- When an exception is caught during an active match, the server logs the abrupt disconnection, sends a `GAME_OVER` frame to the surviving client with `"reason": "DISCONNECT"`, unregisters and closes the sockets in `CLEANUP`, and returns to `WAITING_FOR_PLAYERS`.
 
-### 3.3 0-Byte EOF Detection:
-- Socket receive loops evaluate `if not data: break` on every receive cycle.
-- After a user cleanly exits (e.g. types `/quit`, presses `Ctl+C`, or closes the terminal), calling `sock.close()`, 0 bytes (`b""`) is detected, the server logs the clean disconnection, sends a `GAME_OVER` frame to the remaining client with `"reason":"DISCONNECT"`, releases socket resources, and closes the connection.
+### 3.3 0-Byte EOF Detection :
+- Non-blocking socket receive handlers evaluate `if not chunk:` (`b""`) on every `EVENT_READ` cycle.
+- If 0-byte EOF is detected in `WAITING_FOR_PLAYERS` before `Player_2` joins, the server unregisters and closes `Player_1`'s socket, clears `clients`, and remains in `WAITING_FOR_PLAYERS`.
+- If 0-byte EOF is detected during an active match (`PLAYER_TURN` or `EVALUATE_MOVE`), the server logs the clean disconnection, sends a `GAME_OVER` frame to the surviving client with `"reason": "DISCONNECT"`, unregisters and closes all match sockets in `CLEANUP`, and resets the lobby for the next match.
