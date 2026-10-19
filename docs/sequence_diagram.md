@@ -102,16 +102,16 @@ sequenceDiagram
 
 ### 1.2 State Mutation & Mid-Turn `MOVE` Broadcast
 ---
-- **Move Evaluation (`PLAYER_TURN` $\rightarrow$ `EVALUATE_MOVE`) :** 
+- **Move Evaluation (`PLAYER_TURN` -> `EVALUATE_MOVE`) :** 
   - On a valid `MOVE`, the server updates `tanks["Player_1"]["x"]`, records `move_path`, sets `move_used = True`, and computes `time_remaining` from `turn_deadline`.
-- **Synchronous Broadcast (`EVALUATE_MOVE` $\rightarrow$ `PLAYER_TURN`) :** 
+- **Synchronous Broadcast (`EVALUATE_MOVE` -> `PLAYER_TURN`) :** 
   - The server synchronously sends `STATE_UPDATE` (`action: "MOVE"`, `next_turn: "Player_1"`, `time_remaining`) to both `Player_1` and `Player_2`. Both clients redraw tank positions and HUD timers while `Player_1` retains turn control to `FIRE`.
 
 ### 1.3 Ballistic Simulation, `STATE_UPDATE` Broadcast & Score Synchronization
 ---
-- **Physics & HP Evaluation (`PLAYER_TURN` $\rightarrow$ `EVALUATE_MOVE`) :**
+- **Physics & HP Evaluation (`PLAYER_TURN` -> `EVALUATE_MOVE`) :**
   - On a valid `FIRE`, the server simulates the projectile `trajectory` across `board_matrix`, records terrain `craters`, and deducts opponent HP (**25 HP** direct hit; **10 HP** shrapnel hit within 2 units).
-- **Win/Draw Evaluation & Turn Switch (`EVALUATE_MOVE` $\rightarrow$ `CHECK_WIN_DRAW`) :**
+- **Win/Draw Evaluation & Turn Switch (`EVALUATE_MOVE` -> `CHECK_WIN_DRAW`) :**
   - **Match Continues (`HP > 0` and `round <= 20`) :** 
     - The server synchronously broadcasts `STATE_UPDATE` (`action: "FIRE"`, `damage_dealt`, updated `tanks` HP, `next_turn: "Player_2"`, `time_remaining: 30`) to both clients to synchronize live scores, switches `active_turn = "Player_2"`, resets `move_used = False` and the 30s clock, and returns to `PLAYER_TURN`.
   - **Match Ended (`HP <= 0` or `round > 20`) :** 
