@@ -13,6 +13,7 @@ from tankscii.protocol import (
     build_game_start_message,
     build_lobby_wait_message,
     build_move_message,
+    build_state_resume_message,
     build_state_update_message,
     validate_connect_payload,
     validate_disconnect_payload,
@@ -73,6 +74,33 @@ class TestProtocolSchemasAndValidation(unittest.TestCase):
             with self.subTest(msg_type=msg["msg_type"]):
                 is_valid, detail = validate_frame_envelope(msg)
                 self.assertTrue(is_valid, detail)
+
+    def test_state_resume_message_builder_produces_valid_envelope(self) -> None:
+        """Verify build_state_resume_message passes validate_frame_envelope and populates fields."""
+        sample_tanks = {
+            "Player_1": {"x": 13, "y": 6, "hp": 100},
+            "Player_2": {"x": 70, "y": 6, "hp": 75},
+        }
+        resume_msg = build_state_resume_message(
+            assigned_id="Player_2",
+            opponent_nickname="Alpha",
+            round_num=2,
+            tanks=sample_tanks,
+            craters=[{"x": 70, "radius": 2}],
+            active_turn="Player_2",
+            time_remaining=45,
+            move_used=False,
+            scores={"Player_1_hp": 100, "Player_2_hp": 75, "rounds": 2},
+            message="Session resumed.",
+        )
+        is_valid, detail = validate_frame_envelope(resume_msg)
+        self.assertTrue(is_valid, detail)
+        self.assertEqual(resume_msg["msg_type"], "STATE_RESUME")
+        self.assertEqual(resume_msg["payload"]["assigned_id"], "Player_2")
+        self.assertEqual(resume_msg["payload"]["opponent_nickname"], "Alpha")
+        self.assertEqual(resume_msg["payload"]["round"], 2)
+        self.assertEqual(resume_msg["payload"]["active_turn"], "Player_2")
+        self.assertFalse(resume_msg["payload"]["move_used"])
 
     def test_validate_fire_payload_boundary_fuzzing(self) -> None:
         """Verify FIRE angle (0..180) and power (1..100) reject out-of-bounds values."""

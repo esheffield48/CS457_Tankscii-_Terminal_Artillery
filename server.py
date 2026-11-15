@@ -28,6 +28,7 @@ from tankscii import (
     MAX_PORT,
     MAX_ROUNDS,
     MIN_PORT,
+    RECONNECT_GRACE_SECONDS,
     TURN_DURATION_SECONDS,
 )
 from tankscii.framing import (
@@ -50,6 +51,7 @@ from tankscii.protocol import (
     build_game_over_message,
     build_game_start_message,
     build_lobby_wait_message,
+    build_state_resume_message,
     build_state_update_message,
     validate_connect_payload,
     validate_disconnect_payload,
@@ -182,6 +184,7 @@ class TanksciiServer:
         # Accepted TCP connections awaiting their application-layer CONNECT frame
         self.unassigned_sessions: dict[int, ClientSession] = {}
         self.turns_completed_in_round: int = 0
+        self.paused_turn_remaining: float = float(TURN_DURATION_SECONDS)
 
     def initialize_listening_socket(self) -> None:
         """Create, bind (`0.0.0.0`), and register the non-blocking listen socket.
@@ -244,10 +247,11 @@ class TanksciiServer:
         """
         client_sock.setblocking(False)
 
+        has_disconnected_slot = self._has_temporarily_disconnected_player()
         if (
             len(self.clients) >= MAX_PLAYERS
             or self.fsm_state != "WAITING_FOR_PLAYERS"
-        ):
+        ) and not has_disconnected_slot:
             self.logger.warning(
                 "Rejected connection from %s:%d with ERROR(LOBBY_FULL) "
                 "(active_players=%d/%d, state=%s).",
@@ -288,8 +292,18 @@ class TanksciiServer:
 
         Returns:
             `None` in `"WAITING_FOR_PLAYERS"` (blocks indefinitely until socket I/O),
-            or `max(0.0, turn_deadline - clock_fn())` in `"PLAYER_TURN"`.
+            the remaining reconnection grace window when a player is temporarily
+            disconnected, or `max(0.0, turn_deadline - clock_fn())` in `"PLAYER_TURN"`.
         """
+        if self._has_temporarily_disconnected_player():
+            grace_deadlines = [
+                c.disconnect_deadline
+                for c in self.clients.values()
+                if c.connection_status == "TEMPORARILY_DISCONNECTED"
+                and c.disconnect_deadline is not None
+            ]
+            if grace_deadlines:
+                return max(0.0, min(grace_deadlines) - self.clock_fn())
         if self.fsm_state == "PLAYER_TURN":
             return max(0.0, self.turn_deadline - self.clock_fn())
         return None
@@ -428,6 +442,12 @@ class TanksciiServer:
                 send_frame_safely(session.sock, error_msg)
                 continue
 
+            if (
+                session.player_id is not None
+                and self.clients.get(session.player_id) is not None
+            ):
+                session = self.clients[session.player_id]
+
             self.dispatch_client_frame(session, frame)
 
     def dispatch_client_frame(
@@ -456,7 +476,7 @@ class TanksciiServer:
             if (
                 len(self.clients) >= MAX_PLAYERS
                 or self.fsm_state != "WAITING_FOR_PLAYERS"
-            ):
+            ) and not self._has_temporarily_disconnected_player():
                 lobby_full_error = build_error_message(
                     error_code="LOBBY_FULL",
                     detail="Server match in progress (2/2 players active).",
@@ -483,6 +503,18 @@ class TanksciiServer:
             return
 
         if msg_type in ("MOVE", "FIRE"):
+            if self._has_temporarily_disconnected_player():
+                paused_error = build_error_message(
+                    error_code="OUT_OF_TURN",
+                    detail=(
+                        "Match paused waiting for opponent to reconnect "
+                        "(60s grace period)."
+                    ),
+                    retry_allowed=True,
+                )
+                send_frame_safely(session.sock, paused_error)
+                return
+
             # Enforce turn ownership before touching any shared match state or clock.
             sender_id = frame["player_id"]
             if (
@@ -522,10 +554,14 @@ class TanksciiServer:
         session: ClientSession,
         frame: dict[str, Any],
     ) -> None:
-        """Process a `CONNECT` handshake frame during `WAITING_FOR_PLAYERS`.
+        """Process a `CONNECT` handshake frame for initial lobby join or reconnection.
 
-        Assigns the first client to `"Player_1"` (replying with `LOBBY_WAIT`) and
-        the second client to `"Player_2"` (triggering `start_match()`).
+        In `WAITING_FOR_PLAYERS`, assigns the first client to `"Player_1"`
+        (replying with `LOBBY_WAIT`) and the second client to `"Player_2"`
+        (triggering `start_match()`). During an active match when a player slot
+        is `TEMPORARILY_DISCONNECTED`, validates the returning player's identity,
+        rebinds their new TCP socket to the preserved `ClientSession`, and
+        transmits `STATE_RESUME`.
 
         Args:
             session: Connecting client session.
@@ -540,10 +576,11 @@ class TanksciiServer:
             send_frame_safely(session.sock, duplicate_error)
             return
 
+        has_disconnected_slot = self._has_temporarily_disconnected_player()
         if (
             len(self.clients) >= MAX_PLAYERS
             or self.fsm_state != "WAITING_FOR_PLAYERS"
-        ):
+        ) and not has_disconnected_slot:
             lobby_full_error = build_error_message(
                 error_code="LOBBY_FULL",
                 detail="Server match in progress (2/2 players active).",
@@ -567,8 +604,13 @@ class TanksciiServer:
             self._unregister_and_close_session(session)
             return
 
-        self.unassigned_sessions.pop(id(session), None)
         cleaned_nickname = payload["nickname"].strip()
+
+        if has_disconnected_slot and self.fsm_state != "WAITING_FOR_PLAYERS":
+            self._handle_reconnect_handshake(session, cleaned_nickname)
+            return
+
+        self.unassigned_sessions.pop(id(session), None)
 
         if "Player_1" not in self.clients:
             if cleaned_nickname in ("DEFAULT", "Commander"):
@@ -605,6 +647,158 @@ class TanksciiServer:
             session.addr[1],
         )
         self.start_match()
+
+    def _handle_reconnect_handshake(
+        self,
+        session: ClientSession,
+        cleaned_nickname: str,
+    ) -> None:
+        """Match a reconnecting client to a `TEMPORARILY_DISCONNECTED` slot and resume."""
+        disconnected_sessions = [
+            c
+            for c in self.clients.values()
+            if c.connection_status == "TEMPORARILY_DISCONNECTED"
+        ]
+        matched_session: ClientSession | None = None
+        for candidate in disconnected_sessions:
+            if (
+                cleaned_nickname.lower() == candidate.nickname.lower()
+                or (
+                    cleaned_nickname in ("Player_1", "Player_2")
+                    and cleaned_nickname == candidate.player_id
+                )
+            ):
+                matched_session = candidate
+                break
+
+        if matched_session is None and cleaned_nickname in (
+            "DEFAULT",
+            "Commander",
+            DEFAULT_P1_NICKNAME,
+            DEFAULT_P2_NICKNAME,
+        ):
+            matched_session = disconnected_sessions[0]
+
+        if matched_session is None:
+            self.logger.warning(
+                "Rejected reconnect attempt with unmatched nickname '%s' from %s:%d.",
+                cleaned_nickname,
+                session.addr[0],
+                session.addr[1],
+            )
+            lobby_full_error = build_error_message(
+                error_code="LOBBY_FULL",
+                detail=(
+                    "Match in progress; reconnect using your registered "
+                    "player nickname/ID."
+                ),
+                retry_allowed=False,
+            )
+            send_frame_safely(session.sock, lobby_full_error)
+            self._unregister_and_close_session(session)
+            return
+
+        self.unassigned_sessions.pop(id(session), None)
+        matched_session.sock = session.sock
+        matched_session.addr = session.addr
+        matched_session.stream_buffer = session.stream_buffer
+        matched_session.connection_status = "CONNECTED"
+        matched_session.disconnect_deadline = None
+        session.player_id = matched_session.player_id
+        session.nickname = matched_session.nickname
+
+        try:
+            self.selector.modify(
+                session.sock, selectors.EVENT_READ, data=matched_session
+            )
+        except (KeyError, ValueError, OSError):
+            try:
+                self.selector.register(
+                    session.sock, selectors.EVENT_READ, data=matched_session
+                )
+            except (KeyError, ValueError, OSError):
+                pass
+
+        self.logger.info(
+            "Reconnected %s ('%s') from %s:%d; restoring session state.",
+            matched_session.player_id,
+            matched_session.nickname,
+            matched_session.addr[0],
+            matched_session.addr[1],
+        )
+
+        remaining_seconds = max(
+            1,
+            min(
+                TURN_DURATION_SECONDS,
+                int(math.ceil(self.paused_turn_remaining)),
+            ),
+        )
+        self.final_scores = {
+            "Player_1_hp": self.tanks["Player_1"]["hp"],
+            "Player_2_hp": self.tanks["Player_2"]["hp"],
+            "rounds": self.round,
+        }
+
+        if not self._has_temporarily_disconnected_player():
+            self.turn_deadline = self.clock_fn() + self.paused_turn_remaining
+            p1_session = self.clients["Player_1"]
+            p2_session = self.clients["Player_2"]
+            resume_text = (
+                f"{matched_session.nickname} reconnected — match resumed!"
+            )
+            resume_p1 = build_state_resume_message(
+                assigned_id="Player_1",
+                opponent_nickname=p2_session.nickname,
+                round_num=self.round,
+                tanks=copy.deepcopy(self.tanks),
+                craters=copy.deepcopy(self.craters),
+                active_turn=self.active_turn,
+                time_remaining=remaining_seconds,
+                move_used=self.move_used,
+                scores=copy.deepcopy(self.final_scores),
+                message=resume_text,
+            )
+            resume_p2 = build_state_resume_message(
+                assigned_id="Player_2",
+                opponent_nickname=p1_session.nickname,
+                round_num=self.round,
+                tanks=copy.deepcopy(self.tanks),
+                craters=copy.deepcopy(self.craters),
+                active_turn=self.active_turn,
+                time_remaining=remaining_seconds,
+                move_used=self.move_used,
+                scores=copy.deepcopy(self.final_scores),
+                message=resume_text,
+            )
+            send_frame_safely(p1_session.sock, resume_p1)
+            send_frame_safely(p2_session.sock, resume_p2)
+        else:
+            opponent_id = (
+                "Player_2"
+                if matched_session.player_id == "Player_1"
+                else "Player_1"
+            )
+            opponent_session = self.clients.get(opponent_id)
+            opponent_nickname = (
+                opponent_session.nickname if opponent_session else opponent_id
+            )
+            partial_resume = build_state_resume_message(
+                assigned_id=str(matched_session.player_id),
+                opponent_nickname=opponent_nickname,
+                round_num=self.round,
+                tanks=copy.deepcopy(self.tanks),
+                craters=copy.deepcopy(self.craters),
+                active_turn=self.active_turn,
+                time_remaining=remaining_seconds,
+                move_used=self.move_used,
+                scores=copy.deepcopy(self.final_scores),
+                message=(
+                    f"{matched_session.nickname} reconnected — waiting for "
+                    "opponent to reconnect..."
+                ),
+            )
+            send_frame_safely(matched_session.sock, partial_resume)
 
     def start_match(self) -> None:
         """Initialize match state in `GAME_START` and transition to `PLAYER_TURN`.
@@ -969,7 +1163,11 @@ class TanksciiServer:
 
         # 2. If both clients remain connected, broadcast a clean TURN_START state
         # update without the trajectory or impact marker for the next player's turn.
-        if self.fsm_state == "PLAYER_TURN" and len(self.clients) == MAX_PLAYERS:
+        if (
+            self.fsm_state == "PLAYER_TURN"
+            and len(self.clients) == MAX_PLAYERS
+            and not self._has_temporarily_disconnected_player()
+        ):
             clean_turn_state_msg = build_state_update_message(
                 round_num=self.round,
                 action="TURN_START",
@@ -985,17 +1183,51 @@ class TanksciiServer:
             )
             self.broadcast_message(clean_turn_state_msg)
 
+    def check_reconnect_grace_timeout(self) -> bool:
+        """Check whether any `TEMPORARILY_DISCONNECTED` player's 60s grace window expired.
+
+        If `clock_fn() >= session.disconnect_deadline`, transitions to `GAME_OVER`,
+        awards victory (`reason="DISCONNECT"`) to the surviving opponent, and
+        resets the lobby.
+
+        Returns:
+            `True` if a reconnection grace period expired and ended the match.
+        """
+        for player_id, session in list(self.clients.items()):
+            if (
+                session.connection_status == "TEMPORARILY_DISCONNECTED"
+                and session.disconnect_deadline is not None
+                and self.clock_fn() >= session.disconnect_deadline
+            ):
+                self.logger.warning(
+                    "60-second reconnection grace period expired for %s ('%s'); "
+                    "awarding DISCONNECT victory to opponent.",
+                    player_id,
+                    session.nickname,
+                )
+                self._award_survivor_victory(
+                    departing_id=player_id,
+                    reason="DISCONNECT",
+                    message=(
+                        f"{player_id} disconnected from the server. "
+                        "You win by forfeit!"
+                    ),
+                )
+                return True
+        return False
+
     def check_turn_timeout(self) -> bool:
         """Enforce the 60-second turn deadline when in `PLAYER_TURN`.
 
-        If `clock_fn() >= turn_deadline`, sends `ERROR ("TIMEOUT")` to the
-        delinquent active player, broadcasts `STATE_UPDATE (action="TIMEOUT")`
-        to hand off the turn to the opponent, and resets the 60-second timer
-        (or terminates with a `ROUND_LIMIT` draw if round 20 just finished).
+        While a player is `TEMPORARILY_DISCONNECTED`, pauses the active turn
+        timer and instead checks the 60-second reconnection grace deadline.
 
         Returns:
-            `True` if a turn timeout occurred and was handled, `False` otherwise.
+            `True` if a turn or reconnection timeout occurred and was handled.
         """
+        if self._has_temporarily_disconnected_player():
+            return self.check_reconnect_grace_timeout()
+
         if self.fsm_state != "PLAYER_TURN":
             return False
 
@@ -1093,8 +1325,9 @@ class TanksciiServer:
 
         Iterates over a static snapshot `list(self.clients.items())` so that
         an abrupt mid-broadcast socket failure (`BrokenPipeError` / `TCP RST`)
-        never mutates `self.clients` during iteration. Failed client IDs are
-        collected in `disconnected_ids` and processed after the loop completes.
+        never mutates `self.clients` during iteration. Skips any session whose
+        `connection_status` is `"TEMPORARILY_DISCONNECTED"`. Failed client IDs
+        are collected in `disconnected_ids` and processed after the loop completes.
 
         Args:
             message: Complete message envelope dictionary to broadcast.
@@ -1106,6 +1339,8 @@ class TanksciiServer:
         """
         disconnected_ids: list[str] = []
         for player_id, session in list(self.clients.items()):
+            if session.connection_status == "TEMPORARILY_DISCONNECTED":
+                continue
             if not send_frame_safely(session.sock, message):
                 disconnected_ids.append(player_id)
 
@@ -1122,9 +1357,11 @@ class TanksciiServer:
         """Process a graceful `DISCONNECT` frame from a client.
 
         If received during `WAITING_FOR_PLAYERS`, removes the departing client
-        and keeps the lobby open. If received during an active match, awards
-        victory to the surviving player with `reason="FORFEIT"` and transitions
-        through `GAME_OVER` -> `CLEANUP` -> `WAITING_FOR_PLAYERS`.
+        and keeps the lobby open. During an active match:
+        - `reason == "FORFEIT"` immediately awards victory to the opponent and
+          transitions through `GAME_OVER` -> `CLEANUP` -> `WAITING_FOR_PLAYERS`.
+        - `reason == "USER_QUIT"` preserves match state and places the player
+          into a 60-second `TEMPORARILY_DISCONNECTED` reconnection grace window.
 
         Args:
             session: Departing client's `ClientSession`.
@@ -1151,11 +1388,20 @@ class TanksciiServer:
             return
 
         departing_id = session.player_id
+        reason = payload["reason"]
         self.logger.info(
             "Received graceful DISCONNECT (reason=%s) from %s.",
-            payload["reason"],
+            reason,
             departing_id,
         )
+        if (
+            reason == "USER_QUIT"
+            and self.fsm_state not in ("INIT", "WAITING_FOR_PLAYERS", "GAME_OVER", "CLEANUP")
+            and departing_id in ("Player_1", "Player_2")
+        ):
+            self._enter_reconnect_grace_period(session)
+            return
+
         self._award_survivor_victory(
             departing_id=departing_id,
             reason="FORFEIT",
@@ -1166,9 +1412,10 @@ class TanksciiServer:
         """Handle 0-byte EOF or abrupt socket errors (`RST` / `BrokenPipeError`).
 
         In `WAITING_FOR_PLAYERS`, unregisters and closes the dropped socket and
-        resets the lobby slot. During an active match, transitions to `GAME_OVER`,
-        notifies the surviving player with `reason="DISCONNECT"`, and resets the
-        lobby in `CLEANUP`.
+        resets the lobby slot. During an active match, preserves match state
+        (`board_matrix`, `tanks`, `craters`, `final_scores`, `active_turn`) and
+        marks the player `TEMPORARILY_DISCONNECTED` for a 60-second reconnection
+        grace period.
 
         Args:
             session: Disconnected `ClientSession`.
@@ -1180,7 +1427,7 @@ class TanksciiServer:
             self.fsm_state,
         )
         if (
-            self.fsm_state == "WAITING_FOR_PLAYERS"
+            self.fsm_state in ("INIT", "WAITING_FOR_PLAYERS")
             or session.player_id is None
         ):
             self._remove_lobby_session(session)
@@ -1190,12 +1437,66 @@ class TanksciiServer:
             self._unregister_and_close_session(session)
             return
 
+        if session.player_id in ("Player_1", "Player_2"):
+            self._enter_reconnect_grace_period(session)
+            return
+
         departing_id = session.player_id
         self._award_survivor_victory(
             departing_id=departing_id,
             reason="DISCONNECT",
             message=f"{departing_id} disconnected from the server. You win by forfeit!",
         )
+
+    def _enter_reconnect_grace_period(self, session: ClientSession) -> None:
+        """Close the dropped socket while holding the player's slot for 60s reconnection."""
+        player_id = str(session.player_id)
+        if not self._has_temporarily_disconnected_player():
+            self.paused_turn_remaining = max(
+                1.0, self.turn_deadline - self.clock_fn()
+            )
+
+        self._close_socket_only(session.sock)
+        session.stream_buffer.clear()
+        session.connection_status = "TEMPORARILY_DISCONNECTED"
+        session.disconnect_deadline = self.clock_fn() + float(
+            RECONNECT_GRACE_SECONDS
+        )
+        self.final_scores = {
+            "Player_1_hp": self.tanks.get("Player_1", {}).get("hp", 100),
+            "Player_2_hp": self.tanks.get("Player_2", {}).get("hp", 100),
+            "rounds": self.round,
+        }
+        self.logger.warning(
+            "%s ('%s') marked TEMPORARILY_DISCONNECTED for %ds reconnection "
+            "grace period; preserving match state (round=%d, active_turn=%s).",
+            player_id,
+            session.nickname,
+            RECONNECT_GRACE_SECONDS,
+            self.round,
+            self.active_turn,
+        )
+
+        opponent_id = "Player_2" if player_id == "Player_1" else "Player_1"
+        opponent_session = self.clients.get(opponent_id)
+        if (
+            opponent_session is not None
+            and opponent_session.connection_status == "CONNECTED"
+        ):
+            disconnect_notice = build_state_update_message(
+                round_num=self.round,
+                action="PLAYER_DISCONNECTED",
+                actor_id=player_id,
+                tanks=copy.deepcopy(self.tanks),
+                move_path=None,
+                trajectory=None,
+                impact=None,
+                damage_dealt=0,
+                craters=copy.deepcopy(self.craters),
+                next_turn=self.active_turn,
+                time_remaining=RECONNECT_GRACE_SECONDS,
+            )
+            send_frame_safely(opponent_session.sock, disconnect_notice)
 
     def cleanup_and_reset_lobby(self) -> None:
         """Transition through `CLEANUP`, close all client sockets, and reset lobby.
@@ -1220,6 +1521,7 @@ class TanksciiServer:
         self.tanks = {}
         self.active_turn = "Player_1"
         self.turn_deadline = 0.0
+        self.paused_turn_remaining = float(TURN_DURATION_SECONDS)
         self.move_used = False
         self.round = 1
         self.turns_completed_in_round = 0
@@ -1279,7 +1581,10 @@ class TanksciiServer:
         )
 
         survivor_session = self.clients.get(survivor_id)
-        if survivor_session is not None:
+        if (
+            survivor_session is not None
+            and survivor_session.connection_status == "CONNECTED"
+        ):
             game_over_msg = build_game_over_message(
                 winner=survivor_id,
                 reason=reason,
@@ -1302,12 +1607,25 @@ class TanksciiServer:
                     self._remove_lobby_session(session)
             return
 
-        departing_id = disconnected_ids[0]
-        self._award_survivor_victory(
-            departing_id=departing_id,
-            reason="DISCONNECT",
-            message=f"{departing_id} disconnected from the server. You win by forfeit!",
+        for player_id in disconnected_ids:
+            session = self.clients.get(player_id)
+            if session is not None:
+                self.handle_unexpected_disconnect(session)
+
+    def _has_temporarily_disconnected_player(self) -> bool:
+        """Return True if any registered player session is `TEMPORARILY_DISCONNECTED`."""
+        return any(
+            session.connection_status == "TEMPORARILY_DISCONNECTED"
+            for session in self.clients.values()
         )
+
+    def _close_socket_only(self, sock: socket.socket) -> None:
+        """Unregister a socket from `self.selector` and close it while keeping session state."""
+        try:
+            self.selector.unregister(sock)
+        except (KeyError, ValueError, OSError):
+            pass
+        self._close_socket_safely(sock)
 
     def _remove_lobby_session(self, session: ClientSession) -> None:
         """Unregister and close a session during `WAITING_FOR_PLAYERS`."""
@@ -1329,11 +1647,12 @@ class TanksciiServer:
         """Return True if `session` is still an active lobby or match session."""
         if id(session) in self.unassigned_sessions:
             return True
-        if (
-            session.player_id is not None
-            and self.clients.get(session.player_id) is session
-        ):
-            return True
+        if session.player_id is not None:
+            registered = self.clients.get(session.player_id)
+            if registered is session or (
+                registered is not None and registered.sock is session.sock
+            ):
+                return True
         return False
 
     @staticmethod

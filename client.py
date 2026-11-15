@@ -49,6 +49,7 @@ from tankscii.renderer import (
     format_action_summary,
     format_game_over_banner,
     format_hud_header,
+    format_state_resume_banner,
     format_tutorial_banner,
     print_scanline_block,
     redraw_hud_and_board_in_place,
@@ -495,6 +496,8 @@ class TanksciiClient:
             self.handle_lobby_wait(payload)
         elif msg_type == "GAME_START":
             self.handle_game_start(payload)
+        elif msg_type == "STATE_RESUME":
+            self.handle_state_resume(payload)
         elif msg_type == "STATE_UPDATE":
             self.handle_state_update(payload)
         elif msg_type == "ERROR":
@@ -606,6 +609,58 @@ class TanksciiClient:
 
         self.needs_turn_prompt = self.active_turn == self.assigned_id
 
+    def handle_state_resume(self, payload: dict[str, Any]) -> None:
+        """Process `STATE_RESUME`, restore full match state, and render the board.
+
+        Args:
+            payload: `STATE_RESUME` payload dictionary.
+        """
+        self.assigned_id = str(payload.get("assigned_id", self.assigned_id))
+        if self.used_default_nickname:
+            self.nickname = (
+                DEFAULT_P1_NICKNAME
+                if self.assigned_id == "Player_1"
+                else DEFAULT_P2_NICKNAME
+            )
+        self._ensure_connected_banner_printed()
+        self.opponent_nickname = str(
+            payload.get("opponent_nickname", self.opponent_nickname)
+        )
+        self.current_round = int(payload.get("round", self.current_round))
+        self.tanks = dict(payload.get("tanks", self.tanks))
+        self.craters = list(payload.get("craters") or self.craters)
+        self.active_turn = str(payload.get("active_turn", self.active_turn))
+        self.time_remaining = int(
+            payload.get("time_remaining", TURN_DURATION_SECONDS)
+        )
+        self.move_used = bool(payload.get("move_used", False))
+        self.last_fire_rendered_in_place = False
+
+        print()
+        print(
+            format_state_resume_banner(payload, use_color=self.use_color),
+            flush=True,
+        )
+        hud_text = format_hud_header(
+            assigned_id=self.assigned_id,
+            opponent_nickname=self.opponent_nickname,
+            current_round=self.current_round,
+            tanks=self.tanks,
+            active_turn=self.active_turn,
+            time_remaining=self.time_remaining,
+            use_color=self.use_color,
+            player_nickname=self.nickname,
+        )
+        battlefield_text = render_battlefield_ascii(
+            tanks=self.tanks,
+            craters=self.craters,
+            use_color=self.use_color,
+        )
+        print_scanline_block(hud_text, line_delay=self.scanline_delay)
+        print_scanline_block(battlefield_text, line_delay=self.scanline_delay)
+
+        self.needs_turn_prompt = self.active_turn == self.assigned_id
+
     def handle_state_update(self, payload: dict[str, Any]) -> None:
         """Process `STATE_UPDATE`, render trajectory/craters, and update turn state.
 
@@ -625,6 +680,20 @@ class TanksciiClient:
 
         action = str(payload.get("action", ""))
         actor_id = str(payload.get("actor_id", ""))
+        if action == "PLAYER_DISCONNECTED":
+            self.last_fire_rendered_in_place = False
+            print()
+            print(
+                format_action_summary(
+                    payload,
+                    use_color=self.use_color,
+                    player_names=self.get_player_names_map(),
+                ),
+                flush=True,
+            )
+            self.needs_turn_prompt = False
+            return
+
         if action == "MOVE" and actor_id == self.assigned_id:
             self.move_used = True
         else:

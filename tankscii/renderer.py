@@ -488,8 +488,44 @@ def format_action_summary(
         )
         return f"{ANSI_IMPACT}{narrative}{ANSI_RESET}" if use_color else narrative
 
+    if action == "PLAYER_DISCONNECTED":
+        narrative = (
+            f">> COMMS INTERRUPTED! {actor_name}'s radio link dropped — "
+            "holding battlefield state for 60s reconnection grace period..."
+        )
+        return (
+            f"{ANSI_CRATER_FLOOR}{narrative}{ANSI_RESET}"
+            if use_color
+            else narrative
+        )
+
     narrative = f">> FIELD REPORT: {actor_name} executed {action}."
     return narrative
+
+
+def format_state_resume_banner(
+    payload: dict[str, Any],
+    use_color: bool = False,
+) -> str:
+    """Format a status narrative line when a disconnected player resumes their session.
+
+    Args:
+        payload: Validated ``STATE_RESUME`` payload dictionary.
+        use_color: Whether to wrap the narrative line in ANSI color codes.
+
+    Returns:
+        Formatted reconnection narrative string.
+    """
+    resume_msg = payload.get(
+        "message",
+        "Armor Crewman reconnected — resuming artillery match without state loss!",
+    )
+    narrative = f">> LINK RESTORED: {resume_msg}"
+    return (
+        f"{ANSI_SURFACE_INTACT}{narrative}{ANSI_RESET}"
+        if use_color
+        else narrative
+    )
 
 
 def format_game_over_banner(

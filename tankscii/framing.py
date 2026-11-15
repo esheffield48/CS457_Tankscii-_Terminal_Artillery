@@ -38,6 +38,10 @@ class ClientSession:
         player_id: Assigned canonical role (`"Player_1"` or `"Player_2"`), or None
             before `CONNECT` handshake completes.
         nickname: Validated player display name (1-16 characters).
+        connection_status: Session link status (`"CONNECTED"` or
+            `"TEMPORARILY_DISCONNECTED"`).
+        disconnect_deadline: Monotonic deadline timestamp for the 60-second
+            reconnection grace period when temporarily disconnected, or None.
     """
 
     sock: socket.socket
@@ -45,6 +49,8 @@ class ClientSession:
     stream_buffer: bytearray = field(default_factory=bytearray)
     player_id: str | None = None
     nickname: str = ""
+    connection_status: str = "CONNECTED"
+    disconnect_deadline: float | None = None
 
 
 def serialize_frame(message: dict[str, Any]) -> bytes:

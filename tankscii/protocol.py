@@ -22,6 +22,7 @@ CANONICAL_MESSAGE_TYPES: frozenset[str] = frozenset(
         "MOVE",
         "FIRE",
         "STATE_UPDATE",
+        "STATE_RESUME",
         "ERROR",
         "DISCONNECT",
         "GAME_OVER",
@@ -194,6 +195,44 @@ def build_state_update_message(
         "time_remaining": time_remaining,
     }
     return build_message_envelope("STATE_UPDATE", "SERVER", payload, timestamp)
+
+
+def build_state_resume_message(
+    assigned_id: str,
+    opponent_nickname: str,
+    round_num: int,
+    tanks: dict[str, dict[str, int]],
+    craters: list[dict[str, int]],
+    active_turn: str,
+    time_remaining: int,
+    move_used: bool = False,
+    scores: dict[str, int] | None = None,
+    message: str = "Session resumed.",
+    timestamp: int | None = None,
+) -> dict[str, Any]:
+    """Build a `STATE_RESUME` message sent by the server upon player reconnection."""
+    effective_scores = (
+        scores
+        if scores is not None
+        else {
+            "Player_1_hp": int(tanks.get("Player_1", {}).get("hp", 100)),
+            "Player_2_hp": int(tanks.get("Player_2", {}).get("hp", 100)),
+            "rounds": round_num,
+        }
+    )
+    payload: dict[str, Any] = {
+        "assigned_id": assigned_id,
+        "opponent_nickname": opponent_nickname,
+        "round": round_num,
+        "tanks": tanks,
+        "craters": craters,
+        "active_turn": active_turn,
+        "time_remaining": time_remaining,
+        "move_used": move_used,
+        "scores": effective_scores,
+        "message": message,
+    }
+    return build_message_envelope("STATE_RESUME", "SERVER", payload, timestamp)
 
 
 def build_error_message(

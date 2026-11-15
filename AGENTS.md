@@ -18,20 +18,22 @@ Always consult and obey these four specification documents in `docs/`:
 - **Required Root Entrypoints**: `server.py` and `client.py` at the repository root, formatted cleanly to **PEP 8**, modular, with clear explanatory comments.
 - **Single Source of Truth**: The server owns all match state:
   - `fsm_state`: `"INIT"`, `"WAITING_FOR_PLAYERS"`, `"GAME_START"`, `"PLAYER_TURN"`, `"EVALUATE_MOVE"`, `"CHECK_WIN_DRAW"`, `"GAME_OVER"`, `"CLEANUP"`
-  - `clients`: `{player_id: ClientSession}` (max 2 players)
+  - `clients`: `{player_id: ClientSession}` (max 2 players; tracks `connection_status` `"CONNECTED" | "TEMPORARILY_DISCONNECTED"` and `disconnect_deadline`)
   - `board_matrix`: `80 x 24` 2D ASCII grid
   - `terrain_heights`: `list[int]` of length 80 (`0 <= y < 24`)
   - `craters`: `[{"x": int, "radius": int}, ...]`
   - `tanks`: `{"Player_1": {"x": int, "y": int, "hp": int}, "Player_2": {"x": int, "y": int, "hp": int}}` (`0 <= hp <= 100`, initial `hp = 100`, `Player_1` at `x=10`, `Player_2` at `x=70`)
   - `active_turn`: `"Player_1"` or `"Player_2"`
-  - `turn_deadline`: `time.monotonic() + 30.0`
+  - `turn_deadline`: `time.monotonic() + 60.0` (`TURN_DURATION_SECONDS = 60`)
+  - `paused_turn_remaining`: `float` (frozen remaining turn time while a player is `TEMPORARILY_DISCONNECTED`)
   - `move_used`: `bool` (at most 1 optional `MOVE` of `1–5` units per turn)
   - `round`: `int` (`1–20`)
   - `final_scores`: `{"Player_1_hp": int, "Player_2_hp": int, "rounds": int}`
-- **Damage & Win/Draw Rules**:
+- **Damage, Win/Draw & Reconnection Rules**:
   - **Direct Hit**: `25 HP` damage.
   - **Shrapnel Hit** (within 2 units of impact): `10 HP` damage.
-  - **Victory**: Opponent HP reaches `0` while player HP `> 0` (`"HP_ELIMINATION"`), opponent sends `DISCONNECT` (`"FORFEIT"`), or opponent abruptly disconnects/EOF/RST (`"DISCONNECT"`).
+  - **Reconnection & State Preservation (`RECONNECT_GRACE_SECONDS = 60`)**: When a client socket drops during an active match (`ConnectionResetError`, `BrokenPipeError`, `0-byte EOF`, or `USER_QUIT`), the server marks the player `TEMPORARILY_DISCONNECTED` and preserves match state for 60 seconds. Reconnecting via `CONNECT` using the player's nickname/alias or ID re-attaches the socket and broadcasts `STATE_RESUME` to both clients.
+  - **Victory**: Opponent HP reaches `0` while player HP `> 0` (`"HP_ELIMINATION"`), opponent sends `DISCONNECT` (`"FORFEIT"`), or opponent fails to reconnect before the 60s grace period expires (`"DISCONNECT"`).
   - **Draw**: Both tanks reach `0 HP` in the same turn (`"HP_ELIMINATION"`) OR both tanks remain alive when the 20-round limit expires (`"ROUND_LIMIT"`).
 
 ---

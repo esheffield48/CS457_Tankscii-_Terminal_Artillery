@@ -35,16 +35,18 @@ The authoritative server manages every client socket through four lifecycle phas
    - **First Client (`Player_1`) :** 
       - Registered in `clients["Player_1"] = session`. The server replies with `LOBBY_WAIT` (`assigned_id: "Player_1"`, `message: "Waiting for opponent..."`) and remains in `WAITING_FOR_PLAYERS`.
    - **Second Client (`Player_2`) :** 
-      - Registered in `clients["Player_2"] = session`. The server transitions to `GAME_START`, initializes the map (`board_matrix`), spawns both tanks, randomly selects `first_turn`, broadcasts individualized `GAME_START` frames to both clients, sets `turn_deadline = time.monotonic() + 30.0`, and transitions to `PLAYER_TURN`.
-3. **Multi-Client Capacity :**
+      - Registered in `clients["Player_2"] = session`. The server transitions to `GAME_START`, initializes the map (`board_matrix`), spawns both tanks, randomly selects `first_turn`, broadcasts individualized `GAME_START` frames to both clients, sets `turn_deadline = time.monotonic() + 60.0`, and transitions to `PLAYER_TURN`.
+3. **Multi-Client Capacity & Reconnection Admission :**
    - Match instances are strictly limited to 2 active players (`MAX_PLAYERS = 2`).
-   - If a 3rd client connects while a match is in progress (or after both client slots are filled), the server accepts the socket in non-blocking mode, sends an immediate `ERROR` frame (`error_code: "LOBBY_FULL"`, `detail: "Server match in progress (2/2 players active)."`, `retry_allowed: false`), unregisters the socket, and closes it cleanly without disturbing the active game loop or changing shared match state.
+   - If a 3rd client connects while a match is in progress and both slots are actively `"CONNECTED"`, the server accepts the socket in non-blocking mode, sends an immediate `ERROR` frame (`error_code: "LOBBY_FULL"`, `detail: "Server match in progress (2/2 players active)."`, `retry_allowed: false`), unregisters the socket, and closes it cleanly without disturbing the active game loop or changing shared match state.
+   - If one player is marked `"TEMPORARILY_DISCONNECTED"` within the 60-second reconnection grace window, the server accepts the incoming socket so the returning player can submit `CONNECT` using their nickname/alias or player ID, re-attaches the new socket to their existing `ClientSession`, and transmits `STATE_RESUME` to both clients.
 
 #### **Phase 3** : Active Game Loop Servicing (`PLAYER_TURN` <-> `EVALUATE_MOVE` <-> `CHECK_WIN_DRAW`)
 1. **Dynamic Timeout Multiplexing :** 
    - At the top of each event loop iteration, the server calculates the `select()` timeout:
-      - In `WAITING_FOR_PLAYERS`: `timeout = None` (blocks until a socket event occurs).
-      - In `PLAYER_TURN`: `timeout = max(0.0, turn_deadline - time.monotonic())` to enforce the 30-second turn limit.
+      - In `WAITING_FOR_PLAYERS`: `timeout = None` (capped at `0.5s` in interactive `run_forever` so Windows `SIGINT` / `Ctrl + C` wakes immediately).
+      - In `PLAYER_TURN` (both players connected): `timeout = max(0.0, turn_deadline - time.monotonic())` to enforce the 60-second turn limit.
+      - In `PLAYER_TURN` (while a player is `"TEMPORARILY_DISCONNECTED"`): `timeout = max(0.0, disconnect_deadline - time.monotonic())` to enforce the 60-second reconnection grace period while the active turn timer is paused (`paused_turn_remaining`).
 2. **Non-Blocking Byte Accumulation (`service_connection`) :** 
    - When a client socket triggers `EVENT_READ`, the server reads available bytes via `chunk = session.sock.recv(4096)`.
 3. **Newline Frame Extraction (`\n`) :** 
@@ -53,17 +55,18 @@ The authoritative server manages every client socket through four lifecycle phas
    - Each complete JSON message is validated against the protocol schema and current FSM state:
       - **Out-of-Turn / Invalid Move:** Returns `ERROR` directly to the sender (`session.sock.sendall(...)`); game state and turn clock remain untouched.
       - **Valid `MOVE`:** Updates tank coordinates on `board_matrix`, sets `move_used = True`, broadcasts `STATE_UPDATE (action="MOVE")` to both clients in `clients.values()`, and returns to `PLAYER_TURN`.
-      - **Valid `FIRE`:** Simulates ballistic trajectory across `board_matrix`, applies terrain cratering and HP deductions (`25 HP` direct hit / `10 HP` shrapnel hit), increments `round` / updates `scores`, checks win/draw conditions in `CHECK_WIN_DRAW`, and broadcasts `STATE_UPDATE (action="FIRE")` (followed by `GAME_OVER` if a tank reached `0 HP` or `round > 20`).
+      - **Valid `FIRE`:** Simulates ballistic trajectory across `board_matrix`, applies terrain cratering and HP deductions (`25 HP` direct hit / `10 HP` shrapnel hit), increments `round` / updates `scores`, checks win/draw conditions in `CHECK_WIN_DRAW`, and broadcasts `STATE_UPDATE (action="FIRE")` followed by a clean `STATE_UPDATE (action="TURN_START")` for the next player's turn (or `GAME_OVER` if a tank reached `0 HP` or `round > 20`).
 
-#### **Phase 4** : Client Socket Teardown & Lobby Reset (`GAME_OVER` -> `CLEANUP` -> `WAITING_FOR_PLAYERS`)
+#### **Phase 4** : State Preservation, Reconnection & Lobby Reset (`GAME_OVER` -> `CLEANUP` -> `WAITING_FOR_PLAYERS`)
 1. **Graceful Application Disconnect (`DISCONNECT`) :** 
-   - If a client sends a `DISCONNECT` frame (`reason: "FORFEIT" or "USER_QUIT"`), the server transitions immediately to `GAME_OVER` and broadcasts `GAME_OVER (winner=opponent, reason="FORFEIT", final_scores=...)` to the surviving client.
-2. **0-Byte EOF Detection :** 
+   - If a client sends `DISCONNECT` with `reason: "FORFEIT"`, the server transitions immediately to `GAME_OVER` and broadcasts `GAME_OVER (winner=opponent, reason="FORFEIT", final_scores=...)` to the surviving client.
+   - If a client sends `DISCONNECT` with `reason: "USER_QUIT"` during an active match, it is treated identically to a temporary socket drop (held for the 60-second reconnection grace period).
+2. **0-Byte EOF Detection & 60-Second State Preservation :** 
    - If `session.sock.recv(4096)` returns `b""` (0 bytes), the peer initiated a TCP `FIN` closure.
       - If in `WAITING_FOR_PLAYERS`: The server unregisters and closes `Player_1`'s socket, removes `Player_1` from `clients`, and remains in `WAITING_FOR_PLAYERS` waiting for a new connection.
-      - If in an active match (`PLAYER_TURN` / `EVALUATE_MOVE`): The server transitions to `GAME_OVER`, notifies the surviving client with `GAME_OVER (reason="DISCONNECT")`, and proceeds to `CLEANUP`.
+      - If in an active match (`PLAYER_TURN` / `EVALUATE_MOVE`): The server unregisters and closes **only** the dropped socket, marks `session.connection_status = "TEMPORARILY_DISCONNECTED"` with `session.disconnect_deadline = time.monotonic() + 60.0`, saves `paused_turn_remaining`, holds the game state (`board_matrix`, `tanks`, `craters`, `final_scores`, `active_turn`), and notifies the connected opponent with `STATE_UPDATE (action="PLAYER_DISCONNECTED")`. If the player does not reconnect within 60 seconds, `check_reconnect_grace_timeout()` transitions to `GAME_OVER (reason="DISCONNECT")` and proceeds to `CLEANUP`.
 3. **Abrupt Drop Exception Trapping (`TCP RST` / `EPIPE`) :** 
-   - All `recv()` and `sendall()` calls are wrapped in `try/except (ConnectionResetError, BrokenPipeError, TimeoutError, OSError)` blocks so an abrupt client crash never terminates the server process.
+   - All `recv()` and `sendall()` calls are wrapped in `try/except (ConnectionResetError, BrokenPipeError, TimeoutError, OSError)` blocks so an abrupt client crash never terminates the server process and instead triggers the 60-second state preservation grace period.
 4. **Reclaiming Resources (`CLEANUP`) :** 
    - For every socket in `clients` :
       - The server calls `sel.unregister(sock)` (ignoring `KeyError`/`ValueError` if already unregistered).
@@ -80,14 +83,15 @@ The authoritative server manages every client socket through four lifecycle phas
 | Variable Name | Type | Description | Constraints |
 | :--- | :--- | :--- | :--- |
 | `fsm_state` | str | Current server FSM state | `"INIT"`, `"WAITING_FOR_PLAYERS"`, `"GAME_START"`, `"PLAYER_TURN"`, `"EVALUATE_MOVE"`, `"CHECK_WIN_DRAW"`, `"GAME_OVER"`, or `"CLEANUP"` |
-| `clients` | dict | Connected client socket and session registry | `{player_id: ClientSession}` (max 2 players) |
+| `clients` | dict | Connected client socket and session registry | `{player_id: ClientSession}` (max 2 players; tracks `connection_status` & `disconnect_deadline`) |
 | `stream_buffer` | bytearray | Per-client TCP receive buffer | UTF-8 bytes delimited by `\n` (`0x0A`) |
 | `board_matrix` | list | 2D ASCII battlefield grid | `80 x 24` character matrix |
 | `terrain_heights` | list | Surface elevation per column | `list[int]`, length 80 (`0 <= y < 24`) |
 | `craters` | list | List of terrain craters | `[{"x": int, "radius": int}, ...]` |
 | `tanks` | dict | Tank positions & HP | `{id: {x, y, hp}}`, (`0 <= hp <= 100`) |
 | `active_turn` | str | Active player for current turn | `"Player_1"` or `"Player_2"` |
-| `turn_deadline` | float | Turn expiration timestamp | `time.monotonic() + 30.0` |
+| `turn_deadline` | float | Turn expiration timestamp | `time.monotonic() + 60.0` |
+| `paused_turn_remaining` | float | Frozen turn time remaining during disconnect grace window | `1.0–60.0` |
 | `move_used` | bool | Whether optional move was used this turn | `true` or `false` |
 | `round` | int | Current match round | 1–20 |
 | `final_scores` | dict | Final HP and completed rounds | `{"Player_1_hp": int, "Player_2_hp": int, "rounds": int}` |
@@ -113,9 +117,9 @@ By designing the server around a single-threaded `selectors` event loop, the ser
 2. **Isolation of Per-Client Stream Buffer :**  
    - Each `ClientSession` maintains an independent `stream_buffer = bytearray()`. If `Player_1` sends a fragmented packet (e.g., first half of a `FIRE` JSON string without `\n`), the event loop appends those bytes to `clients["Player_1"].stream_buffer` and immediately returns to `sel.select()` without blocking `Player_2` or delaying the turn timer.
 3. **Deterministic Boundary Race Resolution :**
-   - **Race 1 : `FIRE` Packet vs. 30-Second Turn Timer Expiration :**
-     - In the event loop, readable socket events returned by `sel.select(timeout)` are serviced first, followed immediately by the monotonic clock check. If `Player_1`'s `FIRE` frame arrived before `select()` returned, `FIRE` is processed first, `active_turn` flips to `"Player_2"`, and `turn_deadline` resets to `now + 30.0`, so the subsequent clock check sees `clock < turn_deadline` and does not trigger a false timeout. Conversely, if the timeout already fired on the prior loop iteration, `active_turn` is already `"Player_2"`, so `Player_1`'s late `FIRE` frame is deterministically rejected with `ERROR ("OUT_OF_TURN")`.
+   - **Race 1 : `FIRE` Packet vs. 60-Second Turn Timer Expiration :**
+     - In the event loop, readable socket events returned by `sel.select(timeout)` are serviced first, followed immediately by the monotonic clock check. If `Player_1`'s `FIRE` frame arrived before `select()` returned, `FIRE` is processed first, `active_turn` flips to `"Player_2"`, and `turn_deadline` resets to `now + 60.0`, so the subsequent clock check sees `clock < turn_deadline` and does not trigger a false timeout. Conversely, if the timeout already fired on the prior loop iteration, `active_turn` is already `"Player_2"`, so `Player_1`'s late `FIRE` frame is deterministically rejected with `ERROR ("OUT_OF_TURN")`.
    - **Race 2 : Simultaneous Out-of-Turn Spam During Active Turn :**
      - If `Player_2` transmits `MOVE` or `FIRE` while `active_turn == "Player_1"`, the server validates `frame["player_id"] != self.active_turn` prior to touching `board_matrix`, `tanks`, `move_used`, or `turn_deadline`, and sends `ERROR ("OUT_OF_TURN", retry_allowed=False)` only to `Player_2`.
-   - **Race 3 : Client Disconnect Mid-Broadcast (`BrokenPipeError` / `ConnectionResetError`) :**
-     - When broadcasting `STATE_UPDATE` or `GAME_OVER` across `list(self.clients.items())`, each socket `sendall()` is isolated in its own `try/except OSError` block. Failed client IDs are appended to a `disconnected_ids` list and processed *after* the broadcast loop finishes, preventing dictionary-mutation-during-iteration errors and guaranteeing the surviving player receives the resulting `GAME_OVER (reason="DISCONNECT")` frame.
+   - **Race 3 : Client Disconnect Mid-Broadcast (`BrokenPipeError` / `ConnectionResetError`) & 60s State Preservation :**
+     - When broadcasting `STATE_UPDATE`, `STATE_RESUME`, or `GAME_OVER` across `list(self.clients.items())`, any client already marked `"TEMPORARILY_DISCONNECTED"` is skipped, and each active socket `sendall()` is isolated in its own `try/except OSError` block. Failed client IDs are appended to a `disconnected_ids` list and processed *after* the broadcast loop finishes—transitioning the dropped player to `"TEMPORARILY_DISCONNECTED"` for a 60-second grace period (or awarding `GAME_OVER (reason="DISCONNECT")` if the 60-second grace period expires)—preventing dictionary-mutation-during-iteration errors.

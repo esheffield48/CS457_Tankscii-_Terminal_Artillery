@@ -349,7 +349,7 @@ class TestServerFsmAndConcurrency(unittest.TestCase):
         self.assertEqual(self.server.fsm_state, "WAITING_FOR_PLAYERS")
 
     def test_zero_byte_eof_in_lobby_and_active_match(self) -> None:
-        """Verify 0-byte EOF cleans up lobby in WAITING_FOR_PLAYERS and awards win in match."""
+        """Verify 0-byte EOF cleans up lobby in WAITING_FOR_PLAYERS and starts 60s grace period in match."""
         # Case A: Player 1 disconnects while waiting in lobby
         p1_lobby_sock, _ = self._create_registered_client_pair()
         send_frame_safely(
@@ -363,9 +363,26 @@ class TestServerFsmAndConcurrency(unittest.TestCase):
         self.assertEqual(self.server.fsm_state, "WAITING_FOR_PLAYERS")
         self.assertEqual(len(self.server.clients), 0)
 
-        # Case B: Player 1 abruptly closes socket during active match -> Player 2 wins
+        # Case B: Player 1 abruptly closes socket during active match -> enters 60s grace period, then Player 2 wins
         p1_sock, p2_sock = self._start_two_player_match()
         p1_sock.close()
+        self.server.run_event_loop_once(0.0)
+
+        self.assertEqual(
+            self.server.clients["Player_1"].connection_status,
+            "TEMPORARILY_DISCONNECTED",
+        )
+        self.assertEqual(self.server.fsm_state, "PLAYER_TURN")
+
+        p2_disconnect_notice = self._drain_frames_from_client_socket(p2_sock)
+        self.assertEqual(len(p2_disconnect_notice), 1)
+        self.assertEqual(p2_disconnect_notice[0]["msg_type"], "STATE_UPDATE")
+        self.assertEqual(
+            p2_disconnect_notice[0]["payload"]["action"], "PLAYER_DISCONNECTED"
+        )
+
+        # Advance past the 60s grace period so the disconnect deadline expires
+        self.clock.advance(60.5)
         self.server.run_event_loop_once(0.0)
 
         p2_frames = self._drain_frames_from_client_socket(p2_sock)
@@ -406,6 +423,21 @@ class TestServerFsmAndConcurrency(unittest.TestCase):
         )
 
         self.server.run_event_loop_once(0.0)
+        self.assertEqual(
+            self.server.clients["Player_1"].connection_status,
+            "TEMPORARILY_DISCONNECTED",
+        )
+        self.assertEqual(self.server.fsm_state, "PLAYER_TURN")
+
+        p2_rst_notice = self._drain_frames_from_client_socket(p2_sock)
+        self.assertEqual(len(p2_rst_notice), 1)
+        self.assertEqual(p2_rst_notice[0]["msg_type"], "STATE_UPDATE")
+        self.assertEqual(
+            p2_rst_notice[0]["payload"]["action"], "PLAYER_DISCONNECTED"
+        )
+
+        self.clock.advance(60.5)
+        self.server.run_event_loop_once(0.0)
         p2_rst_frames = self._drain_frames_from_client_socket(p2_sock)
         self.assertEqual(len(p2_rst_frames), 1)
         self.assertEqual(p2_rst_frames[0]["msg_type"], "GAME_OVER")
@@ -424,13 +456,115 @@ class TestServerFsmAndConcurrency(unittest.TestCase):
         )
         self.server.run_event_loop_once(0.0)
 
+        self.assertEqual(
+            self.server.clients["Player_2"].connection_status,
+            "TEMPORARILY_DISCONNECTED",
+        )
+        self.assertEqual(self.server.fsm_state, "PLAYER_TURN")
+
+        p1_bpipe_notice = self._drain_frames_from_client_socket(p1_sock_b)
+        self.assertEqual(len(p1_bpipe_notice), 2)
+        self.assertEqual(p1_bpipe_notice[0]["msg_type"], "STATE_UPDATE")
+        self.assertEqual(p1_bpipe_notice[0]["payload"]["action"], "MOVE")
+        self.assertEqual(p1_bpipe_notice[1]["msg_type"], "STATE_UPDATE")
+        self.assertEqual(
+            p1_bpipe_notice[1]["payload"]["action"], "PLAYER_DISCONNECTED"
+        )
+
+        self.clock.advance(60.5)
+        self.server.run_event_loop_once(0.0)
         p1_bpipe_frames = self._drain_frames_from_client_socket(p1_sock_b)
-        self.assertEqual(len(p1_bpipe_frames), 2)
-        self.assertEqual(p1_bpipe_frames[0]["msg_type"], "STATE_UPDATE")
-        self.assertEqual(p1_bpipe_frames[1]["msg_type"], "GAME_OVER")
-        self.assertEqual(p1_bpipe_frames[1]["payload"]["winner"], "Player_1")
-        self.assertEqual(p1_bpipe_frames[1]["payload"]["reason"], "DISCONNECT")
+        self.assertEqual(len(p1_bpipe_frames), 1)
+        self.assertEqual(p1_bpipe_frames[0]["msg_type"], "GAME_OVER")
+        self.assertEqual(p1_bpipe_frames[0]["payload"]["winner"], "Player_1")
+        self.assertEqual(p1_bpipe_frames[0]["payload"]["reason"], "DISCONNECT")
         self.assertEqual(self.server.fsm_state, "WAITING_FOR_PLAYERS")
+
+    def test_reconnection_handshake_and_state_resume_within_grace_period(
+        self,
+    ) -> None:
+        """Verify a disconnected player reconnecting within 60s resumes match state via STATE_RESUME."""
+        p1_sock, p2_sock = self._start_two_player_match()
+
+        # Player_1 ("Alpha") moves RIGHT 3 (x=13, move_used=True) and fires (angle=45, power=73)
+        send_frame_safely(p1_sock, build_move_message("Player_1", "RIGHT", 3))
+        self.server.run_event_loop_once(0.0)
+        self._drain_frames_from_client_socket(p1_sock)
+        self._drain_frames_from_client_socket(p2_sock)
+        self.assertEqual(self.server.tanks["Player_1"]["x"], 13)
+        self.assertTrue(self.server.move_used)
+
+        send_frame_safely(p1_sock, build_fire_message("Player_1", 45, 73))
+        self.server.run_event_loop_once(0.0)
+        self._drain_frames_from_client_socket(p1_sock)
+        self._drain_frames_from_client_socket(p2_sock)
+        self.assertEqual(self.server.active_turn, "Player_2")
+        preserved_tanks = {
+            pid: dict(state) for pid, state in self.server.tanks.items()
+        }
+        preserved_craters = list(self.server.craters)
+        self.assertGreater(len(preserved_craters), 0)
+
+        # Simulate socket drop on Player_2 ("Bravo")
+        p2_sock.close()
+        self.server.run_event_loop_once(0.0)
+
+        self.assertEqual(
+            self.server.clients["Player_2"].connection_status,
+            "TEMPORARILY_DISCONNECTED",
+        )
+        p1_disc_frames = self._drain_frames_from_client_socket(p1_sock)
+        self.assertEqual(len(p1_disc_frames), 1)
+        self.assertEqual(p1_disc_frames[0]["msg_type"], "STATE_UPDATE")
+        self.assertEqual(
+            p1_disc_frames[0]["payload"]["action"], "PLAYER_DISCONNECTED"
+        )
+
+        # Advance clock by 15.0s (within the 60s grace period) and reconnect as "Bravo"
+        self.clock.advance(15.0)
+        p2_reconn_sock, _ = self._create_registered_client_pair()
+        send_frame_safely(
+            p2_reconn_sock, build_connect_message("Bravo", "1.0.0")
+        )
+        self.server.run_event_loop_once(0.0)
+
+        self.assertEqual(
+            self.server.clients["Player_2"].connection_status, "CONNECTED"
+        )
+        p1_resume_frames = self._drain_frames_from_client_socket(p1_sock)
+        p2_resume_frames = self._drain_frames_from_client_socket(
+            p2_reconn_sock
+        )
+        self.assertEqual(len(p1_resume_frames), 1)
+        self.assertEqual(len(p2_resume_frames), 1)
+        self.assertEqual(p1_resume_frames[0]["msg_type"], "STATE_RESUME")
+        self.assertEqual(p2_resume_frames[0]["msg_type"], "STATE_RESUME")
+
+        p2_payload = p2_resume_frames[0]["payload"]
+        self.assertEqual(p2_payload["assigned_id"], "Player_2")
+        self.assertEqual(p2_payload["opponent_nickname"], "Alpha")
+        self.assertEqual(p2_payload["round"], 1)
+        self.assertEqual(p2_payload["active_turn"], "Player_2")
+        self.assertEqual(p2_payload["tanks"], preserved_tanks)
+        self.assertEqual(p2_payload["craters"], preserved_craters)
+
+        # Verify reconnected Player_2 can immediately execute MOVE and FIRE commands
+        send_frame_safely(
+            p2_reconn_sock, build_move_message("Player_2", "LEFT", 2)
+        )
+        self.server.run_event_loop_once(0.0)
+        p2_move_frames = self._drain_frames_from_client_socket(p2_reconn_sock)
+        self.assertEqual(len(p2_move_frames), 1)
+        self.assertEqual(p2_move_frames[0]["msg_type"], "STATE_UPDATE")
+        self.assertEqual(p2_move_frames[0]["payload"]["action"], "MOVE")
+        self.assertEqual(self.server.tanks["Player_2"]["x"], 68)
+
+        send_frame_safely(
+            p2_reconn_sock, build_fire_message("Player_2", 135, 60)
+        )
+        self.server.run_event_loop_once(0.0)
+        self.assertEqual(self.server.active_turn, "Player_1")
+        self.assertEqual(self.server.round, 2)
 
 
 if __name__ == "__main__":

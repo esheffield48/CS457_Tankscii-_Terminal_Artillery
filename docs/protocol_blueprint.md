@@ -55,6 +55,7 @@
 | `MOVE` | Client -> Server | Active player submits move direction and distance value (optional). |
 | `FIRE` | Client -> Server | Active player submits firing angle and power. |
 | `STATE_UPDATE` | Server -> Clients | Server broadcasts updated map state, players health, and active player turn. |
+| `STATE_RESUME` | Server -> Clients | Server restores preserved board state, scores, and active turn to both clients when a temporarily disconnected player reconnects within the 60-second grace period. |
 | `ERROR` | Server -> Client | Server notifies client of out-of-turn move, invalid input values, turn timeout, full lobby, or malformed messages. | 
 | `DISCONNECT` | Client -> Server | Client notifies server of intentional departure/quit. |
 | `GAME_OVER` | Server -> Clients | Server broadcasts final game outcome (Winner / Draw / Forfeit), number of rounds completed, and final health values. |
@@ -65,10 +66,10 @@
 
 | JSON Key | Type | Description | Constraints |
 | :--- | :--- | :--- | :--- |
-| `nickname` | str | Player's nickname | 1–16 characters |
+| `nickname` | str | Player's nickname (or reconnect alias/ID) | 1–16 characters (defaults: `"CobraKing"` / `"Thunderbolt"`) |
 | `client_version` | str | Version string | SemVer format (e.g., `"1.0.0"`) |
 
-- **Payload Example :** "payload":{"nickname":"SideQwest","client_version":"1.0.0"}
+- **Payload Example :** "payload":{"nickname":"CobraKing","client_version":"1.0.0"}
 
 ### `LOBBY_WAIT`
 
@@ -87,9 +88,9 @@
 | `opponent_nickname` | str | Opponent's nickname | 1–16 characters |
 | `tanks` | dict | Initial tank positions & HP | `{id: {x, y, hp}}`, (initial hp = 100) |
 | `first_turn` | str | Starting turn | `"Player_1"` or `"Player_2"` |
-| `turn_duration` | int | Turn countdown limit in seconds | 30 |
+| `turn_duration` | int | Turn countdown limit in seconds | 60 |
 
-- **Payload Example :** "payload":{"assigned_id":"Player_1","opponent_nickname":"LionTurtle","tanks":{"Player_1":{"x":10,"y":6,"hp":100},"Player_2":{"x":70,"y":6,"hp":100}},"first_turn":"Player_1","turn_duration":30}
+- **Payload Example :** "payload":{"assigned_id":"Player_1","opponent_nickname":"Thunderbolt","tanks":{"Player_1":{"x":10,"y":6,"hp":100},"Player_2":{"x":70,"y":6,"hp":100}},"first_turn":"Player_1","turn_duration":60}
 
 ### `MOVE`
 
@@ -104,7 +105,7 @@
 
 | JSON Key | Type | Description | Constraints |
 | :--- | :--- | :--- | :--- |
-| `angle` | int | Launch angle in degrees | 0 <= angle <= 180 |
+| `angle` | int | Forward-relative launch angle in degrees (`0–89` forward, `90` vertical, `91–180` backward) | 0 <= angle <= 180 |
 | `power` | int | Launch power percentage | 1 <= power <= 100 |
 
 - **Payload Example :** "payload":{"angle":45,"power":75}
@@ -114,18 +115,35 @@
 | JSON Key | Type | Description | Constraints |
 | :--- | :--- | :--- | :--- |
 | `round` | int | Current match round | 1–20 |
-| `action` | str | Triggering action | `"MOVE"` or `"FIRE"` or `"TIMEOUT"` |
+| `action` | str | Triggering action | `"MOVE"`, `"FIRE"`, `"TIMEOUT"`, `"TURN_START"`, or `"PLAYER_DISCONNECTED"` |
 | `actor_id` | str | Active player performing action | `"Player_1"` or `"Player_2"` |
 | `tanks` | dict | Tank positions & HP | `{id: {x, y, hp}}` |
-| `move_path` | list | Coordinates traversed during movement | `[[x, y], ...]` (`null` on `"FIRE"`) |
-| `trajectory` | list | Path of the projectile | `[[x, y], ...]` (`null` on `"MOVE"`) |
-| `impact` | dict | Impact point & result | `{"coord": [x, y], "result": "HIT" or "MISS" or "GROUND"}` (`null` on `"MOVE"`) |
+| `move_path` | list | Coordinates traversed during movement | `[[x, y], ...]` (`null` on `"FIRE"`, `"TURN_START"`, `"PLAYER_DISCONNECTED"`) |
+| `trajectory` | list | Path of the projectile | `[[x, y], ...]` (`null` on `"MOVE"`, `"TURN_START"`, `"PLAYER_DISCONNECTED"`) |
+| `impact` | dict | Impact point & result | `{"coord": [x, y], "result": "HIT" or "MISS" or "GROUND"}` (`null` on `"MOVE"`, `"TURN_START"`) |
 | `damage_dealt` | int | HP damage inflicted on opponent | `0`, `10` (shrapnel), or `25` (direct hit) |
-| `craters` | list | List of terrain craters | `[{"x": int, "radius": int}, ...]` (empty `[]` on `"MOVE"`) |
+| `craters` | list | List of terrain craters | `[{"x": int, "radius": int}, ...]` |
 | `next_turn` | str | Active player for next turn | `"Player_1"` or `"Player_2"` |
-| `time_remaining` | int | Turn countdown timer in seconds | 1–30 |
+| `time_remaining` | int | Turn countdown timer in seconds | 1–60 |
 
-- **Payload Example :** "payload":{"round":1,"action":"MOVE","actor_id":"Player_1","tanks":{"Player_1":{"x":13,"y":6,"hp":100},"Player_2":{"x":70,"y":6,"hp":100}},"move_path":[[10,6],[11,6],[12,6],[13,6]],"trajectory":null,"impact":null,"damage_dealt":0,"craters":[],"next_turn":"Player_1","time_remaining":24}
+- **Payload Example :** "payload":{"round":1,"action":"MOVE","actor_id":"Player_1","tanks":{"Player_1":{"x":13,"y":6,"hp":100},"Player_2":{"x":70,"y":6,"hp":100}},"move_path":[[10,6],[11,6],[12,6],[13,6]],"trajectory":null,"impact":null,"damage_dealt":0,"craters":[],"next_turn":"Player_1","time_remaining":54}
+
+### `STATE_RESUME`
+
+| JSON Key | Type | Description | Constraints |
+| :--- | :--- | :--- | :--- |
+| `assigned_id` | str | Recipient player identifier | `"Player_1"` or `"Player_2"` |
+| `opponent_nickname` | str | Opponent's nickname | 1–16 characters |
+| `round` | int | Current match round | 1–20 |
+| `tanks` | dict | Preserved tank positions & HP | `{id: {x, y, hp}}` |
+| `craters` | list | Preserved list of terrain craters | `[{"x": int, "radius": int}, ...]` |
+| `active_turn` | str | Active player whose turn resumes | `"Player_1"` or `"Player_2"` |
+| `time_remaining` | int | Restored turn countdown timer in seconds | 1–60 |
+| `move_used` | bool | Whether optional move was already used this turn | `true` or `false` |
+| `scores` | dict | Current HP and round tallies | `{"Player_1_hp": int, "Player_2_hp": int, "rounds": int}` |
+| `message` | str | Resumption status notification | Non-empty string |
+
+- **Payload Example :** "payload":{"assigned_id":"Player_1","opponent_nickname":"Thunderbolt","round":3,"tanks":{"Player_1":{"x":13,"y":6,"hp":100},"Player_2":{"x":70,"y":6,"hp":75}},"craters":[{"x":70,"radius":2}],"active_turn":"Player_1","time_remaining":48,"move_used":true,"scores":{"Player_1_hp":100,"Player_2_hp":75,"rounds":3},"message":"Armor Crewman 'CobraKing' reconnected. Match resumed!"}
 
 ### `ERROR`
 
@@ -233,20 +251,27 @@
 
 ---
 
-## 3. Connection Termination & Socket Lifecycle Management
+## 3. Connection Termination, State Preservation & Reconnection Management
 
 ### 3.1 Application-Layer Disconnect :
 - **Client Action :** Transmits a structured `DISCONNECT` frame (`reason: "FORFEIT"` or `"USER_QUIT"`) and calls `sock.close()` to initiate the TCP FIN 4-way handshake.
-- **Server Action :** Receives `DISCONNECT`, transitions to `GAME_OVER`, broadcasts a `GAME_OVER` frame (`reason: "FORFEIT"`) declaring the surviving opponent the winner, unregisters both sockets from `selectors` (`sel.unregister(sock)`), closes the connections (`sock.close()`), and resets match state in `CLEANUP` back to `WAITING_FOR_PLAYERS`.
+- **Server Action (`FORFEIT`) :** Receives `DISCONNECT` (`reason: "FORFEIT"`), transitions to `GAME_OVER`, broadcasts a `GAME_OVER` frame (`reason: "FORFEIT"`) declaring the surviving opponent the winner, unregisters both sockets from `selectors` (`sel.unregister(sock)`), closes the connections (`sock.close()`), and resets match state in `CLEANUP` back to `WAITING_FOR_PLAYERS`.
+- **Server Action (`USER_QUIT`) :** During an active match, `DISCONNECT` (`reason: "USER_QUIT"`) triggers the 60-second state preservation grace period (Section 3.4) so the player can reconnect if desired.
 
 ### 3.2 Abrupt Drop & Exception Handling :
 - All low-level socket `recv()` and `sendall()` operations are wrapped in `try/except` blocks catching:
   - `ConnectionResetError` (`TCP RST`) : A peer host forcibly closed the connection or crashed.
   - `BrokenPipeError` (`EPIPE`) : The application attempts to `sock.send()` or `sendall()` to a socket whose remote end is already closed.
   - `TimeoutError` / `OSError` : Socket timeout or underlying OS network error.
-- When an exception is caught during an active match, the server logs the abrupt disconnection, sends a `GAME_OVER` frame to the surviving client with `"reason": "DISCONNECT"`, unregisters and closes the sockets in `CLEANUP`, and returns to `WAITING_FOR_PLAYERS`.
+- When an exception is caught during an active match, the server does **not** crash or immediately delete the game room; instead, it transitions the player's session to `"TEMPORARILY_DISCONNECTED"` and preserves match state for a 60-second reconnection grace period (Section 3.4).
 
 ### 3.3 0-Byte EOF Detection :
 - Non-blocking socket receive handlers evaluate `if not chunk:` (`b""`) on every `EVENT_READ` cycle.
 - If 0-byte EOF is detected in `WAITING_FOR_PLAYERS` before `Player_2` joins, the server unregisters and closes `Player_1`'s socket, clears `clients`, and remains in `WAITING_FOR_PLAYERS`.
-- If 0-byte EOF is detected during an active match (`PLAYER_TURN` or `EVALUATE_MOVE`), the server logs the clean disconnection, sends a `GAME_OVER` frame to the surviving client with `"reason": "DISCONNECT"`, unregisters and closes all match sockets in `CLEANUP`, and resets the lobby for the next match.
+- If 0-byte EOF is detected during an active match (`PLAYER_TURN` or `EVALUATE_MOVE`), the server unregisters and closes only the dropped socket, marks the player `"TEMPORARILY_DISCONNECTED"`, and enters the 60-second reconnection grace period.
+
+### 3.4 State Preservation, Reconnection Handshake & `STATE_RESUME` :
+- **State Preservation (`RECONNECT_GRACE_SECONDS = 60`) :** When a client socket drops during an active match, the server marks `ClientSession.connection_status = "TEMPORARILY_DISCONNECTED"`, sets `disconnect_deadline = time.monotonic() + 60.0`, saves `paused_turn_remaining`, holds the complete game state (`board_matrix`, `tanks`, `craters`, `final_scores`, `active_turn`, `round`, `move_used`), and notifies the connected opponent with `STATE_UPDATE` (`action: "PLAYER_DISCONNECTED"`).
+- **Re-connection Handshake :** When the player re-runs `client.py` within 60 seconds and transmits `CONNECT` using their player nickname/alias or ID (`"Player_1"` / `"Player_2"`), the server recognizes the returning player, attaches the new socket to their active `ClientSession`, clears `disconnect_deadline`, and restores `turn_deadline`.
+- **Resumption (`STATE_RESUME`) :** Both clients receive a `STATE_RESUME` frame containing the current board state (`tanks`, `craters`), `scores`, `round`, `active_turn`, `time_remaining`, and `move_used`, allowing the match to proceed seamlessly without state loss.
+- **Grace Period Expiration :** If the 60-second grace period expires without reconnection, the server sends a `GAME_OVER` frame to the surviving client with `"reason": "DISCONNECT"`, unregisters and closes all match sockets in `CLEANUP`, and resets the lobby for the next match.

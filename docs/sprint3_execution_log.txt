@@ -49,14 +49,18 @@ PART 2 : AUTHORITATIVE SERVER EXECUTION LOG (python3 server.py -p 8080)
 $ python3 server.py -p 8080
 2026-10-25 14:30:00 [SERVER] [INFO] Listening socket bound to 0.0.0.0:8080; FSM transitioned INIT -> WAITING_FOR_PLAYERS.
 2026-10-25 14:30:00 [SERVER] [INFO] Accepted TCP connection from 127.0.0.1:51001 (awaiting CONNECT handshake).
-2026-10-25 14:30:00 [SERVER] [INFO] Registered Player_1 ('SideQwest', v1.0.0) from 127.0.0.1:51001; sending LOBBY_WAIT.
+2026-10-25 14:30:00 [SERVER] [INFO] Registered Player_1 ('CobraKing', v1.0.0) from 127.0.0.1:51001; sending LOBBY_WAIT.
 2026-10-25 14:30:00 [SERVER] [INFO] Accepted TCP connection from 127.0.0.1:51002 (awaiting CONNECT handshake).
-2026-10-25 14:30:00 [SERVER] [INFO] Registered Player_2 ('LionTurtle', v1.0.0) from 127.0.0.1:51002; lobby full (2/2).
-2026-10-25 14:30:00 [SERVER] [INFO] FSM transitioned WAITING_FOR_PLAYERS -> GAME_START -> PLAYER_TURN | Round 1/20 | First turn: Player_1 | Player_1 ('SideQwest') vs Player_2 ('LionTurtle').
+2026-10-25 14:30:00 [SERVER] [INFO] Registered Player_2 ('Thunderbolt', v1.0.0) from 127.0.0.1:51002; lobby full (2/2).
+2026-10-25 14:30:00 [SERVER] [INFO] FSM transitioned WAITING_FOR_PLAYERS -> GAME_START -> PLAYER_TURN | Round 1/20 | First turn: Player_1 | Player_1 ('CobraKing') vs Player_2 ('Thunderbolt').
 2026-10-25 14:30:00 [SERVER] [INFO] [Round 1] Player_1 executed MOVE RIGHT 2: (10, 6) -> (12, 6) | time_remaining=60s.
 2026-10-25 14:30:00 [SERVER] [INFO] [Round 1] Player_1 executed FIRE (angle=45 deg, power=73%): impact=(70, 6) result=HIT damage=25 HP | P1 HP=100, P2 HP=75.
 2026-10-25 14:30:00 [SERVER] [INFO] [Round 1] Player_2 executed MOVE RIGHT 2: (70, 4) -> (72, 5) | time_remaining=60s.
 2026-10-25 14:30:00 [SERVER] [INFO] [Round 1] Player_2 executed FIRE (angle=45 deg, power=75%): impact=(13, 6) result=HIT damage=10 HP | P1 HP=90, P2 HP=75.
+2026-10-25 14:30:00 [SERVER] [WARNING] Detected unexpected disconnect (0-byte EOF / socket error) from Player_1 in state PLAYER_TURN.
+2026-10-25 14:30:00 [SERVER] [WARNING] Player_1 ('CobraKing') marked TEMPORARILY_DISCONNECTED for 60s reconnection grace period; preserving match state (round=2, active_turn=Player_1).
+2026-10-25 14:30:00 [SERVER] [INFO] Accepted TCP connection from 127.0.0.1:51099 (awaiting CONNECT handshake).
+2026-10-25 14:30:00 [SERVER] [INFO] Reconnected Player_1 ('CobraKing') from 127.0.0.1:51099; restoring session state.
 2026-10-25 14:30:00 [SERVER] [INFO] [Round 2] Player_1 executed FIRE (angle=45 deg, power=75%): impact=(72, 5) result=HIT damage=25 HP | P1 HP=90, P2 HP=50.
 2026-10-25 14:30:00 [SERVER] [INFO] [Round 2] Player_2 executed FIRE (angle=45 deg, power=75%): impact=(14, 5) result=HIT damage=10 HP | P1 HP=80, P2 HP=50.
 2026-10-25 14:30:00 [SERVER] [INFO] [Round 3] Player_1 executed FIRE (angle=45 deg, power=74%): impact=(71, 4) result=HIT damage=10 HP | P1 HP=80, P2 HP=40.
@@ -70,14 +74,14 @@ $ python3 server.py -p 8080
 2026-10-25 14:30:00 [SERVER] [INFO] FSM transitioned CLEANUP -> WAITING_FOR_PLAYERS; reclaimed client sockets and reset lobby for next match.
 
 --------------------------------------------------------------------------------
-PART 3 : CLIENT 1 SESSION LOG (Player_1 'SideQwest')
+PART 3 : CLIENT 1 SESSION LOG (Player_1 'CobraKing')
 --------------------------------------------------------------------------------
-$ python3 client.py -i 127.0.0.1 -p 8080 -n SideQwest
-[CONNECTED] Radio link established with 127.0.0.1 (127.0.0.1:8080) — Armor Crewman 'SideQwest' reporting for duty.
-[LOBBY] Armor Crewman 'SideQwest' deployed — Holding position in the staging area while waiting for opposing tank crew... (Waiting for opponent...)
+$ python3 client.py -i 127.0.0.1 -p 8080 -n CobraKing
+[CONNECTED] Radio link established with 127.0.0.1 (127.0.0.1:8080) — Armor Crewman 'CobraKing' reporting for duty.
+[LOBBY] Armor Crewman 'CobraKing' deployed — Holding position in the staging area while waiting for opposing tank crew... (Waiting for opponent...)
 
 +--------------------------------------------------------------------------------+
-| TACTICAL BRIEFING // SideQwest vs LionTurtle                                   |
+| TACTICAL BRIEFING // CobraKing vs Thunderbolt                                  |
 | 1. MISSION OBJECTIVE: Destroy the enemy tank (0 HP) or hold higher HP          |
 |    when the 20-round artillery campaign concludes.                             |
 | 2. TURN RULES (60s timer): Optional MOVE LEFT <1-5> or MOVE RIGHT <1-5>        |
@@ -89,7 +93,7 @@ $ python3 client.py -i 127.0.0.1 -p 8080 -n SideQwest
 
 +--------------------------------------------------------------------------------+
 |                  TANKSCII : TERMINAL ARTILLERY | Round 01/20                   |
-|      SideQwest [1> [##########] 100HP | LionTurtle <2] [##########] 100HP      |
+|     CobraKing [1> [##########] 100HP | Thunderbolt <2] [##########] 100HP      |
 |                     Gunner awaiting orders (60s remaining)                     |
 +--------------------------------------------------------------------------------+
 +--------------------------------------------------------------------------------+
@@ -121,12 +125,12 @@ $ python3 client.py -i 127.0.0.1 -p 8080 -n SideQwest
 
 [AIM GUIDE] 10-85 deg aims forward toward your opponent (45 deg = max distance | 90 deg = straight up)
 [COMMANDS] MOVE LEFT <1-5> | MOVE RIGHT <1-5> | FIRE <angle 0-180> <power 1-100> | FORFEIT | QUIT
-[SideQwest Command] > MOVE RIGHT 2
+[CobraKing Command] > MOVE RIGHT 2
 
->> TREADS GRINDING: SideQwest rolls across the ridge from (10, 6) to (12, 6) to take a new firing position.
+>> TREADS GRINDING: CobraKing rolls across the ridge from (10, 6) to (12, 6) to take a new firing position.
 +--------------------------------------------------------------------------------+
 |                  TANKSCII : TERMINAL ARTILLERY | Round 01/20                   |
-|      SideQwest [1> [##########] 100HP | LionTurtle <2] [##########] 100HP      |
+|     CobraKing [1> [##########] 100HP | Thunderbolt <2] [##########] 100HP      |
 |                     Gunner awaiting orders (60s remaining)                     |
 +--------------------------------------------------------------------------------+
 +--------------------------------------------------------------------------------+
@@ -158,13 +162,13 @@ $ python3 client.py -i 127.0.0.1 -p 8080 -n SideQwest
 
 [AIM GUIDE] 10-85 deg aims forward toward your opponent (45 deg = max distance | 90 deg = straight up)
 [COMMANDS] (MOVE already used this turn) FIRE <angle 0-180> <power 1-100> | FORFEIT | QUIT
-[SideQwest Command] > FIRE 45 73
+[CobraKing Command] > FIRE 45 73
 
->> DIRECT HIT! SideQwest's shell screams across the sky and slams squarely into LionTurtle at (70, 6) for 25 HP damage!
+>> DIRECT HIT! CobraKing's shell screams across the sky and slams squarely into Thunderbolt at (70, 6) for 25 HP damage!
 +--------------------------------------------------------------------------------+
 |                  TANKSCII : TERMINAL ARTILLERY | Round 01/20                   |
-|      SideQwest [1> [##########] 100HP | LionTurtle <2] [########--]  75HP      |
-|           STANDBY — Enemy crew LionTurtle is aiming (60s remaining)            |
+|     CobraKing [1> [##########] 100HP | Thunderbolt <2] [########--]  75HP      |
+|           STANDBY — Enemy crew Thunderbolt is aiming (60s remaining)           |
 +--------------------------------------------------------------------------------+
 +--------------------------------------------------------------------------------+
 |                                                                                |
@@ -193,11 +197,11 @@ $ python3 client.py -i 127.0.0.1 -p 8080 -n SideQwest
 |::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::|
 +--------------------------------------------------------------------------------+
 
->> TREADS GRINDING: LionTurtle rolls across the ridge from (70, 4) to (72, 5) to take a new firing position.
+>> TREADS GRINDING: Thunderbolt rolls across the ridge from (70, 4) to (72, 5) to take a new firing position.
 +--------------------------------------------------------------------------------+
 |                  TANKSCII : TERMINAL ARTILLERY | Round 01/20                   |
-|      SideQwest [1> [##########] 100HP | LionTurtle <2] [########--]  75HP      |
-|           STANDBY — Enemy crew LionTurtle is aiming (60s remaining)            |
+|     CobraKing [1> [##########] 100HP | Thunderbolt <2] [########--]  75HP      |
+|           STANDBY — Enemy crew Thunderbolt is aiming (60s remaining)           |
 +--------------------------------------------------------------------------------+
 +--------------------------------------------------------------------------------+
 |                                                                                |
@@ -226,10 +230,10 @@ $ python3 client.py -i 127.0.0.1 -p 8080 -n SideQwest
 |::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::|
 +--------------------------------------------------------------------------------+
 
->> SHRAPNEL BLAST! LionTurtle's shell detonates near (13, 6), rattling SideQwest's hull with 10 HP of concussive shrapnel!
+>> SHRAPNEL BLAST! Thunderbolt's shell detonates near (13, 6), rattling CobraKing's hull with 10 HP of concussive shrapnel!
 +--------------------------------------------------------------------------------+
 |                  TANKSCII : TERMINAL ARTILLERY | Round 01/20                   |
-|      SideQwest [1> [#########-]  90HP | LionTurtle <2] [########--]  75HP      |
+|     CobraKing [1> [#########-]  90HP | Thunderbolt <2] [########--]  75HP      |
 |                     Gunner awaiting orders (60s remaining)                     |
 +--------------------------------------------------------------------------------+
 +--------------------------------------------------------------------------------+
@@ -259,15 +263,48 @@ $ python3 client.py -i 127.0.0.1 -p 8080 -n SideQwest
 |::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::|
 +--------------------------------------------------------------------------------+
 
-[AIM GUIDE] 10-85 deg aims forward toward your opponent (45 deg = max distance | 90 deg = straight up)
-[COMMANDS] MOVE LEFT <1-5> | MOVE RIGHT <1-5> | FIRE <angle 0-180> <power 1-100> | FORFEIT | QUIT
-[SideQwest Command] > FIRE 45 75
-
->> DIRECT HIT! SideQwest's shell screams across the sky and slams squarely into LionTurtle at (72, 5) for 25 HP damage!
+>> LINK RESTORED: CobraKing reconnected — match resumed!
 +--------------------------------------------------------------------------------+
 |                  TANKSCII : TERMINAL ARTILLERY | Round 02/20                   |
-|      SideQwest [1> [#########-]  90HP | LionTurtle <2] [#####-----]  50HP      |
-|           STANDBY — Enemy crew LionTurtle is aiming (60s remaining)            |
+|     CobraKing [1> [#########-]  90HP | Thunderbolt <2] [########--]  75HP      |
+|                     Gunner awaiting orders (60s remaining)                     |
++--------------------------------------------------------------------------------+
++--------------------------------------------------------------------------------+
+|                                                                                |
+|                                                                                |
+|                                                                                |
+|                                                                                |
+|                                                                                |
+|                                                                                |
+|                                                                                |
+|                                                                                |
+|                                                                                |
+|                                                                                |
+|                                                                                |
+|                                                                                |
+|                                                                                |
+|                                                                                |
+|                                                                                |
+|                                                                                |
+|                                                                                |
+|===========     ====================================================     =======|
+|:::::::::::[1>__::::::::::::::::::::::::::::::::::::::::::::::::::::__ <2]::::::|
+|:::::::::::::_::::::::::::::::::::::::::::::::::::::::::::::::::::::::_:::::::::|
+|::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::|
+|::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::|
+|::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::|
+|::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::|
++--------------------------------------------------------------------------------+
+
+[AIM GUIDE] 10-85 deg aims forward toward your opponent (45 deg = max distance | 90 deg = straight up)
+[COMMANDS] MOVE LEFT <1-5> | MOVE RIGHT <1-5> | FIRE <angle 0-180> <power 1-100> | FORFEIT | QUIT
+[CobraKing Command] > FIRE 45 75
+
+>> DIRECT HIT! CobraKing's shell screams across the sky and slams squarely into Thunderbolt at (72, 5) for 25 HP damage!
++--------------------------------------------------------------------------------+
+|                  TANKSCII : TERMINAL ARTILLERY | Round 02/20                   |
+|     CobraKing [1> [#########-]  90HP | Thunderbolt <2] [#####-----]  50HP      |
+|           STANDBY — Enemy crew Thunderbolt is aiming (60s remaining)           |
 +--------------------------------------------------------------------------------+
 +--------------------------------------------------------------------------------+
 |                                                                                |
@@ -296,10 +333,10 @@ $ python3 client.py -i 127.0.0.1 -p 8080 -n SideQwest
 |::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::|
 +--------------------------------------------------------------------------------+
 
->> SHRAPNEL BLAST! LionTurtle's shell detonates near (14, 5), rattling SideQwest's hull with 10 HP of concussive shrapnel!
+>> SHRAPNEL BLAST! Thunderbolt's shell detonates near (14, 5), rattling CobraKing's hull with 10 HP of concussive shrapnel!
 +--------------------------------------------------------------------------------+
 |                  TANKSCII : TERMINAL ARTILLERY | Round 02/20                   |
-|      SideQwest [1> [########--]  80HP | LionTurtle <2] [#####-----]  50HP      |
+|     CobraKing [1> [########--]  80HP | Thunderbolt <2] [#####-----]  50HP      |
 |                     Gunner awaiting orders (60s remaining)                     |
 +--------------------------------------------------------------------------------+
 +--------------------------------------------------------------------------------+
@@ -331,13 +368,13 @@ $ python3 client.py -i 127.0.0.1 -p 8080 -n SideQwest
 
 [AIM GUIDE] 10-85 deg aims forward toward your opponent (45 deg = max distance | 90 deg = straight up)
 [COMMANDS] MOVE LEFT <1-5> | MOVE RIGHT <1-5> | FIRE <angle 0-180> <power 1-100> | FORFEIT | QUIT
-[SideQwest Command] > FIRE 45 74
+[CobraKing Command] > FIRE 45 74
 
->> SHRAPNEL BLAST! SideQwest's shell detonates near (71, 4), rattling LionTurtle's hull with 10 HP of concussive shrapnel!
+>> SHRAPNEL BLAST! CobraKing's shell detonates near (71, 4), rattling Thunderbolt's hull with 10 HP of concussive shrapnel!
 +--------------------------------------------------------------------------------+
 |                  TANKSCII : TERMINAL ARTILLERY | Round 03/20                   |
-|      SideQwest [1> [########--]  80HP | LionTurtle <2] [####------]  40HP      |
-|           STANDBY — Enemy crew LionTurtle is aiming (60s remaining)            |
+|     CobraKing [1> [########--]  80HP | Thunderbolt <2] [####------]  40HP      |
+|           STANDBY — Enemy crew Thunderbolt is aiming (60s remaining)           |
 +--------------------------------------------------------------------------------+
 +--------------------------------------------------------------------------------+
 |                                                                                |
@@ -366,10 +403,10 @@ $ python3 client.py -i 127.0.0.1 -p 8080 -n SideQwest
 |::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::|
 +--------------------------------------------------------------------------------+
 
->> CRATER IMPACT! LionTurtle's shell gouges the earth at (19, 6) — no hull damage as the smoke clears.
+>> CRATER IMPACT! Thunderbolt's shell gouges the earth at (19, 6) — no hull damage as the smoke clears.
 +--------------------------------------------------------------------------------+
 |                  TANKSCII : TERMINAL ARTILLERY | Round 03/20                   |
-|      SideQwest [1> [########--]  80HP | LionTurtle <2] [####------]  40HP      |
+|     CobraKing [1> [########--]  80HP | Thunderbolt <2] [####------]  40HP      |
 |                     Gunner awaiting orders (60s remaining)                     |
 +--------------------------------------------------------------------------------+
 +--------------------------------------------------------------------------------+
@@ -401,13 +438,13 @@ $ python3 client.py -i 127.0.0.1 -p 8080 -n SideQwest
 
 [AIM GUIDE] 10-85 deg aims forward toward your opponent (45 deg = max distance | 90 deg = straight up)
 [COMMANDS] MOVE LEFT <1-5> | MOVE RIGHT <1-5> | FIRE <angle 0-180> <power 1-100> | FORFEIT | QUIT
-[SideQwest Command] > FIRE 45 74
+[CobraKing Command] > FIRE 45 74
 
->> SHRAPNEL BLAST! SideQwest's shell detonates near (71, 2), rattling LionTurtle's hull with 10 HP of concussive shrapnel!
+>> SHRAPNEL BLAST! CobraKing's shell detonates near (71, 2), rattling Thunderbolt's hull with 10 HP of concussive shrapnel!
 +--------------------------------------------------------------------------------+
 |                  TANKSCII : TERMINAL ARTILLERY | Round 04/20                   |
-|      SideQwest [1> [########--]  80HP | LionTurtle <2] [###-------]  30HP      |
-|           STANDBY — Enemy crew LionTurtle is aiming (60s remaining)            |
+|     CobraKing [1> [########--]  80HP | Thunderbolt <2] [###-------]  30HP      |
+|           STANDBY — Enemy crew Thunderbolt is aiming (60s remaining)           |
 +--------------------------------------------------------------------------------+
 +--------------------------------------------------------------------------------+
 |                                                                                |
@@ -436,10 +473,10 @@ $ python3 client.py -i 127.0.0.1 -p 8080 -n SideQwest
 |::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::|
 +--------------------------------------------------------------------------------+
 
->> CRATER IMPACT! LionTurtle's shell gouges the earth at (19, 4) — no hull damage as the smoke clears.
+>> CRATER IMPACT! Thunderbolt's shell gouges the earth at (19, 4) — no hull damage as the smoke clears.
 +--------------------------------------------------------------------------------+
 |                  TANKSCII : TERMINAL ARTILLERY | Round 04/20                   |
-|      SideQwest [1> [########--]  80HP | LionTurtle <2] [###-------]  30HP      |
+|     CobraKing [1> [########--]  80HP | Thunderbolt <2] [###-------]  30HP      |
 |                     Gunner awaiting orders (60s remaining)                     |
 +--------------------------------------------------------------------------------+
 +--------------------------------------------------------------------------------+
@@ -471,13 +508,13 @@ $ python3 client.py -i 127.0.0.1 -p 8080 -n SideQwest
 
 [AIM GUIDE] 10-85 deg aims forward toward your opponent (45 deg = max distance | 90 deg = straight up)
 [COMMANDS] MOVE LEFT <1-5> | MOVE RIGHT <1-5> | FIRE <angle 0-180> <power 1-100> | FORFEIT | QUIT
-[SideQwest Command] > FIRE 45 73
+[CobraKing Command] > FIRE 45 73
 
->> SHRAPNEL BLAST! SideQwest's shell detonates near (71, 1), rattling LionTurtle's hull with 10 HP of concussive shrapnel!
+>> SHRAPNEL BLAST! CobraKing's shell detonates near (71, 1), rattling Thunderbolt's hull with 10 HP of concussive shrapnel!
 +--------------------------------------------------------------------------------+
 |                  TANKSCII : TERMINAL ARTILLERY | Round 05/20                   |
-|      SideQwest [1> [########--]  80HP | LionTurtle <2] [##--------]  20HP      |
-|           STANDBY — Enemy crew LionTurtle is aiming (60s remaining)            |
+|     CobraKing [1> [########--]  80HP | Thunderbolt <2] [##--------]  20HP      |
+|           STANDBY — Enemy crew Thunderbolt is aiming (60s remaining)           |
 +--------------------------------------------------------------------------------+
 +--------------------------------------------------------------------------------+
 |                                                                                |
@@ -506,10 +543,10 @@ $ python3 client.py -i 127.0.0.1 -p 8080 -n SideQwest
 |::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::|
 +--------------------------------------------------------------------------------+
 
->> CRATER IMPACT! LionTurtle's shell gouges the earth at (18, 4) — no hull damage as the smoke clears.
+>> CRATER IMPACT! Thunderbolt's shell gouges the earth at (18, 4) — no hull damage as the smoke clears.
 +--------------------------------------------------------------------------------+
 |                  TANKSCII : TERMINAL ARTILLERY | Round 05/20                   |
-|      SideQwest [1> [########--]  80HP | LionTurtle <2] [##--------]  20HP      |
+|     CobraKing [1> [########--]  80HP | Thunderbolt <2] [##--------]  20HP      |
 |                     Gunner awaiting orders (60s remaining)                     |
 +--------------------------------------------------------------------------------+
 +--------------------------------------------------------------------------------+
@@ -541,13 +578,13 @@ $ python3 client.py -i 127.0.0.1 -p 8080 -n SideQwest
 
 [AIM GUIDE] 10-85 deg aims forward toward your opponent (45 deg = max distance | 90 deg = straight up)
 [COMMANDS] MOVE LEFT <1-5> | MOVE RIGHT <1-5> | FIRE <angle 0-180> <power 1-100> | FORFEIT | QUIT
-[SideQwest Command] > FIRE 45 73
+[CobraKing Command] > FIRE 45 73
 
->> DIRECT HIT! SideQwest's shell screams across the sky and slams squarely into LionTurtle at (72, 1) for 25 HP damage!
+>> DIRECT HIT! CobraKing's shell screams across the sky and slams squarely into Thunderbolt at (72, 1) for 25 HP damage!
 +--------------------------------------------------------------------------------+
 |                  TANKSCII : TERMINAL ARTILLERY | Round 06/20                   |
-|      SideQwest [1> [########--]  80HP | LionTurtle <2] [----------]   0HP      |
-|           STANDBY — Enemy crew LionTurtle is aiming (60s remaining)            |
+|     CobraKing [1> [########--]  80HP | Thunderbolt <2] [----------]   0HP      |
+|           STANDBY — Enemy crew Thunderbolt is aiming (60s remaining)           |
 +--------------------------------------------------------------------------------+
 +--------------------------------------------------------------------------------+
 |                                                                                |
@@ -577,19 +614,19 @@ $ python3 client.py -i 127.0.0.1 -p 8080 -n SideQwest
 +--------------------------------------------------------------------------------+
 
 ==================================================================================
-  MATCH RESULT: VICTORY (SideQwest WINS!)
-  Reason : HP_ELIMINATION — SideQwest wins by destroying LionTurtle's tank!
-  Scores : SideQwest HP: 80 | LionTurtle HP: 0 | Rounds: 6
+  MATCH RESULT: VICTORY (CobraKing WINS!)
+  Reason : HP_ELIMINATION — CobraKing wins by destroying Thunderbolt's tank!
+  Scores : CobraKing HP: 80 | Thunderbolt HP: 0 | Rounds: 6
 ==================================================================================
 
 --------------------------------------------------------------------------------
-PART 4 : CLIENT 2 SESSION LOG (Player_2 'LionTurtle')
+PART 4 : CLIENT 2 SESSION LOG (Player_2 'Thunderbolt')
 --------------------------------------------------------------------------------
-$ python3 client.py -i 127.0.0.1 -p 8080 -n LionTurtle
-[CONNECTED] Radio link established with 127.0.0.1 (127.0.0.1:8080) — Armor Crewman 'LionTurtle' reporting for duty.
+$ python3 client.py -i 127.0.0.1 -p 8080 -n Thunderbolt
+[CONNECTED] Radio link established with 127.0.0.1 (127.0.0.1:8080) — Armor Crewman 'Thunderbolt' reporting for duty.
 
 +--------------------------------------------------------------------------------+
-| TACTICAL BRIEFING // LionTurtle vs SideQwest                                   |
+| TACTICAL BRIEFING // Thunderbolt vs CobraKing                                  |
 | 1. MISSION OBJECTIVE: Destroy the enemy tank (0 HP) or hold higher HP          |
 |    when the 20-round artillery campaign concludes.                             |
 | 2. TURN RULES (60s timer): Optional MOVE LEFT <1-5> or MOVE RIGHT <1-5>        |
@@ -601,8 +638,8 @@ $ python3 client.py -i 127.0.0.1 -p 8080 -n LionTurtle
 
 +--------------------------------------------------------------------------------+
 |                  TANKSCII : TERMINAL ARTILLERY | Round 01/20                   |
-|      SideQwest [1> [##########] 100HP | LionTurtle <2] [##########] 100HP      |
-|            STANDBY — Enemy crew SideQwest is aiming (60s remaining)            |
+|     CobraKing [1> [##########] 100HP | Thunderbolt <2] [##########] 100HP      |
+|            STANDBY — Enemy crew CobraKing is aiming (60s remaining)            |
 +--------------------------------------------------------------------------------+
 +--------------------------------------------------------------------------------+
 |                                                                                |
@@ -631,11 +668,11 @@ $ python3 client.py -i 127.0.0.1 -p 8080 -n LionTurtle
 |::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::|
 +--------------------------------------------------------------------------------+
 
->> TREADS GRINDING: SideQwest rolls across the ridge from (10, 6) to (12, 6) to take a new firing position.
+>> TREADS GRINDING: CobraKing rolls across the ridge from (10, 6) to (12, 6) to take a new firing position.
 +--------------------------------------------------------------------------------+
 |                  TANKSCII : TERMINAL ARTILLERY | Round 01/20                   |
-|      SideQwest [1> [##########] 100HP | LionTurtle <2] [##########] 100HP      |
-|            STANDBY — Enemy crew SideQwest is aiming (60s remaining)            |
+|     CobraKing [1> [##########] 100HP | Thunderbolt <2] [##########] 100HP      |
+|            STANDBY — Enemy crew CobraKing is aiming (60s remaining)            |
 +--------------------------------------------------------------------------------+
 +--------------------------------------------------------------------------------+
 |                                                                                |
@@ -664,10 +701,10 @@ $ python3 client.py -i 127.0.0.1 -p 8080 -n LionTurtle
 |::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::|
 +--------------------------------------------------------------------------------+
 
->> DIRECT HIT! SideQwest's shell screams across the sky and slams squarely into LionTurtle at (70, 6) for 25 HP damage!
+>> DIRECT HIT! CobraKing's shell screams across the sky and slams squarely into Thunderbolt at (70, 6) for 25 HP damage!
 +--------------------------------------------------------------------------------+
 |                  TANKSCII : TERMINAL ARTILLERY | Round 01/20                   |
-|      SideQwest [1> [##########] 100HP | LionTurtle <2] [########--]  75HP      |
+|     CobraKing [1> [##########] 100HP | Thunderbolt <2] [########--]  75HP      |
 |                     Gunner awaiting orders (60s remaining)                     |
 +--------------------------------------------------------------------------------+
 +--------------------------------------------------------------------------------+
@@ -699,12 +736,12 @@ $ python3 client.py -i 127.0.0.1 -p 8080 -n LionTurtle
 
 [AIM GUIDE] 10-85 deg aims forward toward your opponent (45 deg = max distance | 90 deg = straight up)
 [COMMANDS] MOVE LEFT <1-5> | MOVE RIGHT <1-5> | FIRE <angle 0-180> <power 1-100> | FORFEIT | QUIT
-[LionTurtle Command] > MOVE RIGHT 2
+[Thunderbolt Command] > MOVE RIGHT 2
 
->> TREADS GRINDING: LionTurtle rolls across the ridge from (70, 4) to (72, 5) to take a new firing position.
+>> TREADS GRINDING: Thunderbolt rolls across the ridge from (70, 4) to (72, 5) to take a new firing position.
 +--------------------------------------------------------------------------------+
 |                  TANKSCII : TERMINAL ARTILLERY | Round 01/20                   |
-|      SideQwest [1> [##########] 100HP | LionTurtle <2] [########--]  75HP      |
+|     CobraKing [1> [##########] 100HP | Thunderbolt <2] [########--]  75HP      |
 |                     Gunner awaiting orders (60s remaining)                     |
 +--------------------------------------------------------------------------------+
 +--------------------------------------------------------------------------------+
@@ -736,13 +773,13 @@ $ python3 client.py -i 127.0.0.1 -p 8080 -n LionTurtle
 
 [AIM GUIDE] 10-85 deg aims forward toward your opponent (45 deg = max distance | 90 deg = straight up)
 [COMMANDS] (MOVE already used this turn) FIRE <angle 0-180> <power 1-100> | FORFEIT | QUIT
-[LionTurtle Command] > FIRE 45 75
+[Thunderbolt Command] > FIRE 45 75
 
->> SHRAPNEL BLAST! LionTurtle's shell detonates near (13, 6), rattling SideQwest's hull with 10 HP of concussive shrapnel!
+>> SHRAPNEL BLAST! Thunderbolt's shell detonates near (13, 6), rattling CobraKing's hull with 10 HP of concussive shrapnel!
 +--------------------------------------------------------------------------------+
 |                  TANKSCII : TERMINAL ARTILLERY | Round 01/20                   |
-|      SideQwest [1> [#########-]  90HP | LionTurtle <2] [########--]  75HP      |
-|            STANDBY — Enemy crew SideQwest is aiming (60s remaining)            |
+|     CobraKing [1> [#########-]  90HP | Thunderbolt <2] [########--]  75HP      |
+|            STANDBY — Enemy crew CobraKing is aiming (60s remaining)            |
 +--------------------------------------------------------------------------------+
 +--------------------------------------------------------------------------------+
 |                                                                                |
@@ -771,10 +808,45 @@ $ python3 client.py -i 127.0.0.1 -p 8080 -n LionTurtle
 |::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::|
 +--------------------------------------------------------------------------------+
 
->> DIRECT HIT! SideQwest's shell screams across the sky and slams squarely into LionTurtle at (72, 5) for 25 HP damage!
+>> COMMS INTERRUPTED! CobraKing's radio link dropped — holding battlefield state for 60s reconnection grace period...
+
+>> LINK RESTORED: CobraKing reconnected — match resumed!
 +--------------------------------------------------------------------------------+
 |                  TANKSCII : TERMINAL ARTILLERY | Round 02/20                   |
-|      SideQwest [1> [#########-]  90HP | LionTurtle <2] [#####-----]  50HP      |
+|     CobraKing [1> [#########-]  90HP | Thunderbolt <2] [########--]  75HP      |
+|            STANDBY — Enemy crew CobraKing is aiming (60s remaining)            |
++--------------------------------------------------------------------------------+
++--------------------------------------------------------------------------------+
+|                                                                                |
+|                                                                                |
+|                                                                                |
+|                                                                                |
+|                                                                                |
+|                                                                                |
+|                                                                                |
+|                                                                                |
+|                                                                                |
+|                                                                                |
+|                                                                                |
+|                                                                                |
+|                                                                                |
+|                                                                                |
+|                                                                                |
+|                                                                                |
+|                                                                                |
+|===========     ====================================================     =======|
+|:::::::::::[1>__::::::::::::::::::::::::::::::::::::::::::::::::::::__ <2]::::::|
+|:::::::::::::_::::::::::::::::::::::::::::::::::::::::::::::::::::::::_:::::::::|
+|::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::|
+|::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::|
+|::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::|
+|::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::|
++--------------------------------------------------------------------------------+
+
+>> DIRECT HIT! CobraKing's shell screams across the sky and slams squarely into Thunderbolt at (72, 5) for 25 HP damage!
++--------------------------------------------------------------------------------+
+|                  TANKSCII : TERMINAL ARTILLERY | Round 02/20                   |
+|     CobraKing [1> [#########-]  90HP | Thunderbolt <2] [#####-----]  50HP      |
 |                     Gunner awaiting orders (60s remaining)                     |
 +--------------------------------------------------------------------------------+
 +--------------------------------------------------------------------------------+
@@ -806,13 +878,13 @@ $ python3 client.py -i 127.0.0.1 -p 8080 -n LionTurtle
 
 [AIM GUIDE] 10-85 deg aims forward toward your opponent (45 deg = max distance | 90 deg = straight up)
 [COMMANDS] MOVE LEFT <1-5> | MOVE RIGHT <1-5> | FIRE <angle 0-180> <power 1-100> | FORFEIT | QUIT
-[LionTurtle Command] > FIRE 45 75
+[Thunderbolt Command] > FIRE 45 75
 
->> SHRAPNEL BLAST! LionTurtle's shell detonates near (14, 5), rattling SideQwest's hull with 10 HP of concussive shrapnel!
+>> SHRAPNEL BLAST! Thunderbolt's shell detonates near (14, 5), rattling CobraKing's hull with 10 HP of concussive shrapnel!
 +--------------------------------------------------------------------------------+
 |                  TANKSCII : TERMINAL ARTILLERY | Round 02/20                   |
-|      SideQwest [1> [########--]  80HP | LionTurtle <2] [#####-----]  50HP      |
-|            STANDBY — Enemy crew SideQwest is aiming (60s remaining)            |
+|     CobraKing [1> [########--]  80HP | Thunderbolt <2] [#####-----]  50HP      |
+|            STANDBY — Enemy crew CobraKing is aiming (60s remaining)            |
 +--------------------------------------------------------------------------------+
 +--------------------------------------------------------------------------------+
 |                                                                                |
@@ -841,10 +913,10 @@ $ python3 client.py -i 127.0.0.1 -p 8080 -n LionTurtle
 |::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::|
 +--------------------------------------------------------------------------------+
 
->> SHRAPNEL BLAST! SideQwest's shell detonates near (71, 4), rattling LionTurtle's hull with 10 HP of concussive shrapnel!
+>> SHRAPNEL BLAST! CobraKing's shell detonates near (71, 4), rattling Thunderbolt's hull with 10 HP of concussive shrapnel!
 +--------------------------------------------------------------------------------+
 |                  TANKSCII : TERMINAL ARTILLERY | Round 03/20                   |
-|      SideQwest [1> [########--]  80HP | LionTurtle <2] [####------]  40HP      |
+|     CobraKing [1> [########--]  80HP | Thunderbolt <2] [####------]  40HP      |
 |                     Gunner awaiting orders (60s remaining)                     |
 +--------------------------------------------------------------------------------+
 +--------------------------------------------------------------------------------+
@@ -876,13 +948,13 @@ $ python3 client.py -i 127.0.0.1 -p 8080 -n LionTurtle
 
 [AIM GUIDE] 10-85 deg aims forward toward your opponent (45 deg = max distance | 90 deg = straight up)
 [COMMANDS] MOVE LEFT <1-5> | MOVE RIGHT <1-5> | FIRE <angle 0-180> <power 1-100> | FORFEIT | QUIT
-[LionTurtle Command] > FIRE 45 72
+[Thunderbolt Command] > FIRE 45 72
 
->> CRATER IMPACT! LionTurtle's shell gouges the earth at (19, 6) — no hull damage as the smoke clears.
+>> CRATER IMPACT! Thunderbolt's shell gouges the earth at (19, 6) — no hull damage as the smoke clears.
 +--------------------------------------------------------------------------------+
 |                  TANKSCII : TERMINAL ARTILLERY | Round 03/20                   |
-|      SideQwest [1> [########--]  80HP | LionTurtle <2] [####------]  40HP      |
-|            STANDBY — Enemy crew SideQwest is aiming (60s remaining)            |
+|     CobraKing [1> [########--]  80HP | Thunderbolt <2] [####------]  40HP      |
+|            STANDBY — Enemy crew CobraKing is aiming (60s remaining)            |
 +--------------------------------------------------------------------------------+
 +--------------------------------------------------------------------------------+
 |                                                                                |
@@ -911,10 +983,10 @@ $ python3 client.py -i 127.0.0.1 -p 8080 -n LionTurtle
 |::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::|
 +--------------------------------------------------------------------------------+
 
->> SHRAPNEL BLAST! SideQwest's shell detonates near (71, 2), rattling LionTurtle's hull with 10 HP of concussive shrapnel!
+>> SHRAPNEL BLAST! CobraKing's shell detonates near (71, 2), rattling Thunderbolt's hull with 10 HP of concussive shrapnel!
 +--------------------------------------------------------------------------------+
 |                  TANKSCII : TERMINAL ARTILLERY | Round 04/20                   |
-|      SideQwest [1> [########--]  80HP | LionTurtle <2] [###-------]  30HP      |
+|     CobraKing [1> [########--]  80HP | Thunderbolt <2] [###-------]  30HP      |
 |                     Gunner awaiting orders (60s remaining)                     |
 +--------------------------------------------------------------------------------+
 +--------------------------------------------------------------------------------+
@@ -946,13 +1018,13 @@ $ python3 client.py -i 127.0.0.1 -p 8080 -n LionTurtle
 
 [AIM GUIDE] 10-85 deg aims forward toward your opponent (45 deg = max distance | 90 deg = straight up)
 [COMMANDS] MOVE LEFT <1-5> | MOVE RIGHT <1-5> | FIRE <angle 0-180> <power 1-100> | FORFEIT | QUIT
-[LionTurtle Command] > FIRE 45 72
+[Thunderbolt Command] > FIRE 45 72
 
->> CRATER IMPACT! LionTurtle's shell gouges the earth at (19, 4) — no hull damage as the smoke clears.
+>> CRATER IMPACT! Thunderbolt's shell gouges the earth at (19, 4) — no hull damage as the smoke clears.
 +--------------------------------------------------------------------------------+
 |                  TANKSCII : TERMINAL ARTILLERY | Round 04/20                   |
-|      SideQwest [1> [########--]  80HP | LionTurtle <2] [###-------]  30HP      |
-|            STANDBY — Enemy crew SideQwest is aiming (60s remaining)            |
+|     CobraKing [1> [########--]  80HP | Thunderbolt <2] [###-------]  30HP      |
+|            STANDBY — Enemy crew CobraKing is aiming (60s remaining)            |
 +--------------------------------------------------------------------------------+
 +--------------------------------------------------------------------------------+
 |                                                                                |
@@ -981,10 +1053,10 @@ $ python3 client.py -i 127.0.0.1 -p 8080 -n LionTurtle
 |::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::|
 +--------------------------------------------------------------------------------+
 
->> SHRAPNEL BLAST! SideQwest's shell detonates near (71, 1), rattling LionTurtle's hull with 10 HP of concussive shrapnel!
+>> SHRAPNEL BLAST! CobraKing's shell detonates near (71, 1), rattling Thunderbolt's hull with 10 HP of concussive shrapnel!
 +--------------------------------------------------------------------------------+
 |                  TANKSCII : TERMINAL ARTILLERY | Round 05/20                   |
-|      SideQwest [1> [########--]  80HP | LionTurtle <2] [##--------]  20HP      |
+|     CobraKing [1> [########--]  80HP | Thunderbolt <2] [##--------]  20HP      |
 |                     Gunner awaiting orders (60s remaining)                     |
 +--------------------------------------------------------------------------------+
 +--------------------------------------------------------------------------------+
@@ -1016,13 +1088,13 @@ $ python3 client.py -i 127.0.0.1 -p 8080 -n LionTurtle
 
 [AIM GUIDE] 10-85 deg aims forward toward your opponent (45 deg = max distance | 90 deg = straight up)
 [COMMANDS] MOVE LEFT <1-5> | MOVE RIGHT <1-5> | FIRE <angle 0-180> <power 1-100> | FORFEIT | QUIT
-[LionTurtle Command] > FIRE 45 72
+[Thunderbolt Command] > FIRE 45 72
 
->> CRATER IMPACT! LionTurtle's shell gouges the earth at (18, 4) — no hull damage as the smoke clears.
+>> CRATER IMPACT! Thunderbolt's shell gouges the earth at (18, 4) — no hull damage as the smoke clears.
 +--------------------------------------------------------------------------------+
 |                  TANKSCII : TERMINAL ARTILLERY | Round 05/20                   |
-|      SideQwest [1> [########--]  80HP | LionTurtle <2] [##--------]  20HP      |
-|            STANDBY — Enemy crew SideQwest is aiming (60s remaining)            |
+|     CobraKing [1> [########--]  80HP | Thunderbolt <2] [##--------]  20HP      |
+|            STANDBY — Enemy crew CobraKing is aiming (60s remaining)            |
 +--------------------------------------------------------------------------------+
 +--------------------------------------------------------------------------------+
 |                                                                                |
@@ -1051,10 +1123,10 @@ $ python3 client.py -i 127.0.0.1 -p 8080 -n LionTurtle
 |::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::|
 +--------------------------------------------------------------------------------+
 
->> DIRECT HIT! SideQwest's shell screams across the sky and slams squarely into LionTurtle at (72, 1) for 25 HP damage!
+>> DIRECT HIT! CobraKing's shell screams across the sky and slams squarely into Thunderbolt at (72, 1) for 25 HP damage!
 +--------------------------------------------------------------------------------+
 |                  TANKSCII : TERMINAL ARTILLERY | Round 06/20                   |
-|      SideQwest [1> [########--]  80HP | LionTurtle <2] [----------]   0HP      |
+|     CobraKing [1> [########--]  80HP | Thunderbolt <2] [----------]   0HP      |
 |                     Gunner awaiting orders (60s remaining)                     |
 +--------------------------------------------------------------------------------+
 +--------------------------------------------------------------------------------+
@@ -1085,7 +1157,7 @@ $ python3 client.py -i 127.0.0.1 -p 8080 -n LionTurtle
 +--------------------------------------------------------------------------------+
 
 ==================================================================================
-  MATCH RESULT: DEFEAT (SideQwest WINS)
-  Reason : HP_ELIMINATION — SideQwest wins by destroying LionTurtle's tank!
-  Scores : SideQwest HP: 80 | LionTurtle HP: 0 | Rounds: 6
+  MATCH RESULT: DEFEAT (CobraKing WINS)
+  Reason : HP_ELIMINATION — CobraKing wins by destroying Thunderbolt's tank!
+  Scores : CobraKing HP: 80 | Thunderbolt HP: 0 | Rounds: 6
 ==================================================================================

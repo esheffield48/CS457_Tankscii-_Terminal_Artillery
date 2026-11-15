@@ -15,7 +15,7 @@ sequenceDiagram
     participant P2 as Player 2 (Waiting Client)
 
     Note over P1,P2: Pre-Match Handshake: Clients resolve server.sheffield.edu via socket.gethostbyname(), connect TCP,<br/>exchange CONNECT -> LOBBY_WAIT / GAME_START, and synchronize initial 80x24 board & tanks (P1: x=10, P2: x=70, 100 HP)
-    Note over P1,P2: Server in [PLAYER_TURN] (active_turn = "Player_1", move_used = False, 30s turn clock running)
+    Note over P1,P2: Server in [PLAYER_TURN] (active_turn = "Player_1", move_used = False, 60s turn clock running)
 
     rect rgb(45, 55, 72)
     Note over P1,P2: Phase 1 : Move Request, Turn Enforcement & Legality Validation (MOVE)
@@ -31,11 +31,11 @@ sequenceDiagram
         P1->>S: MOVE {"direction": "RIGHT", "distance": 3}\n
         Note over S: Selector wakes on P1 EVENT_READ<br/>FSM: [PLAYER_TURN] -> [EVALUATE_MOVE]<br/>Validates active_turn == "Player_1", terrain bounds, & move_used == False<br/>Mutates State: Player_1 x (10 -> 13), move_used = True
         par Synchronous Broadcast of STATE_UPDATE to All Connected Clients
-            S->>P1: STATE_UPDATE (action="MOVE", tanks={P1: x=13, P2: x=70}, next_turn="Player_1", time_remaining=24)\n
+            S->>P1: STATE_UPDATE (action="MOVE", tanks={P1: x=13, P2: x=70}, next_turn="Player_1", time_remaining=54)\n
         and
-            S->>P2: STATE_UPDATE (action="MOVE", tanks={P1: x=13, P2: x=70}, next_turn="Player_1", time_remaining=24)\n
+            S->>P2: STATE_UPDATE (action="MOVE", tanks={P1: x=13, P2: x=70}, next_turn="Player_1", time_remaining=54)\n
         end
-        Note over P1,P2: Both clients synchronize tank positions, HUD scoreboard (100 HP vs 100 HP), and 24s timer
+        Note over P1,P2: Both clients synchronize tank positions, HUD scoreboard (100 HP vs 100 HP), and 54s timer
         Note over S: FSM: [EVALUATE_MOVE] -> [PLAYER_TURN] (Player_1 retains turn control to FIRE)
     end
     end
@@ -54,18 +54,20 @@ sequenceDiagram
         P1->>S: FIRE {"angle": 45, "power": 75}\n
         Note over S: Selector wakes on P1 EVENT_READ<br/>FSM: [PLAYER_TURN] -> [EVALUATE_MOVE]<br/>Simulates ballistic trajectory, records terrain crater, computes 25 HP Direct Hit<br/>Mutates State: Player_2 HP (100 -> 75), updates round/score tallies<br/>FSM: [EVALUATE_MOVE] -> [CHECK_WIN_DRAW]
         alt Both Tanks HP > 0 and Round <= 20 (Match Continues & Turn Switches)
-            par Synchronous Broadcast of STATE_UPDATE & Score Synchronization
-                S->>P1: STATE_UPDATE (action="FIRE", damage_dealt=25, tanks={P1: 100HP, P2: 75HP}, next_turn="Player_2", time_remaining=30)\n
+            par Synchronous Broadcast of STATE_UPDATE (FIRE) & Clean Next-Turn (TURN_START)
+                S->>P1: STATE_UPDATE (action="FIRE", damage_dealt=25, tanks={P1: 100HP, P2: 75HP}, next_turn="Player_2", time_remaining=60)\n
+                S->>P1: STATE_UPDATE (action="TURN_START", trajectory=null, impact=null, next_turn="Player_2", time_remaining=60)\n
             and
-                S->>P2: STATE_UPDATE (action="FIRE", damage_dealt=25, tanks={P1: 100HP, P2: 75HP}, next_turn="Player_2", time_remaining=30)\n
+                S->>P2: STATE_UPDATE (action="FIRE", damage_dealt=25, tanks={P1: 100HP, P2: 75HP}, next_turn="Player_2", time_remaining=60)\n
+                S->>P2: STATE_UPDATE (action="TURN_START", trajectory=null, impact=null, next_turn="Player_2", time_remaining=60)\n
             end
-            Note over P1,P2: Clients render projectile arc, crater, updated HP scoreboard (P1: 100 HP, P2: 75 HP), and switch turn to Player_2
-            Note over S: FSM: [CHECK_WIN_DRAW] -> [PLAYER_TURN]<br/>Mutates Turn State: active_turn = "Player_2", move_used = False, resets 30s turn_deadline
+            Note over P1,P2: Clients animate projectile arc & impact in place, then redraw clean board and switch turn to Player_2
+            Note over S: FSM: [CHECK_WIN_DRAW] -> [PLAYER_TURN]<br/>Mutates Turn State: active_turn = "Player_2", move_used = False, resets 60s turn_deadline
         else Tank HP <= 0 or Round > 20 (Match Termination & Final Leaderboard Sync)
             par Synchronous Final STATE_UPDATE Broadcast
-                S->>P1: STATE_UPDATE (action="FIRE", damage_dealt=25, tanks={P1: 100HP, P2: 0HP}, next_turn="Player_2", time_remaining=30)\n
+                S->>P1: STATE_UPDATE (action="FIRE", damage_dealt=25, tanks={P1: 100HP, P2: 0HP}, next_turn="Player_2", time_remaining=60)\n
             and
-                S->>P2: STATE_UPDATE (action="FIRE", damage_dealt=25, tanks={P1: 100HP, P2: 0HP}, next_turn="Player_2", time_remaining=30)\n
+                S->>P2: STATE_UPDATE (action="FIRE", damage_dealt=25, tanks={P1: 100HP, P2: 0HP}, next_turn="Player_2", time_remaining=60)\n
             end
             Note over S: FSM: [CHECK_WIN_DRAW] -> [GAME_OVER] -> [CLEANUP]
             par Synchronous Final Score / Leaderboard Broadcast (GAME_OVER)
@@ -75,13 +77,23 @@ sequenceDiagram
             end
             Note over P1,P2: Both clients display final match leaderboard and close connections cleanly
         end
-    else 30-Second Turn Clock Expires Before FIRE (Turn Timeout)
-        Note over S: sel.select(timeout) expires (monotonic clock >= turn_deadline)<br/>Mutates Turn State: active_turn = "Player_2", move_used = False, resets 30s turn_deadline
+    else 60-Second Turn Clock Expires Before FIRE (Turn Timeout)
+        Note over S: sel.select(timeout) expires (monotonic clock >= turn_deadline)<br/>Mutates Turn State: active_turn = "Player_2", move_used = False, resets 60s turn_deadline
         S->>P1: ERROR {"error_code": "TIMEOUT", "retry_allowed": false}\n
         par Synchronous Broadcast of Timeout Turn Handoff
-            S->>P1: STATE_UPDATE (action="TIMEOUT", actor_id="Player_1", next_turn="Player_2", time_remaining=30)\n
+            S->>P1: STATE_UPDATE (action="TIMEOUT", actor_id="Player_1", next_turn="Player_2", time_remaining=60)\n
         and
-            S->>P2: STATE_UPDATE (action="TIMEOUT", actor_id="Player_1", next_turn="Player_2", time_remaining=30)\n
+            S->>P2: STATE_UPDATE (action="TIMEOUT", actor_id="Player_1", next_turn="Player_2", time_remaining=60)\n
+        end
+    else Temporary Client Disconnect & Reconnection Handshake (60s Grace Period)
+        Note over P1,S: P1 socket drops (EOF / ConnectionResetError). Server marks P1 TEMPORARILY_DISCONNECTED (60s grace)
+        S->>P2: STATE_UPDATE (action="PLAYER_DISCONNECTED", actor_id="Player_1", next_turn="Player_1")\n
+        P1->>S: CONNECT {"nickname": "CobraKing", "client_version": "1.0.0"}\n
+        Note over S: Server matches returning player, re-attaches socket to P1 session, and restores turn_deadline
+        par Synchronous STATE_RESUME Broadcast to Both Clients
+            S->>P1: STATE_RESUME (assigned_id="Player_1", tanks=..., craters=..., active_turn="Player_1", scores=...)\n
+        and
+            S->>P2: STATE_RESUME (assigned_id="Player_2", tanks=..., craters=..., active_turn="Player_1", scores=...)\n
         end
     end
     end
@@ -94,12 +106,12 @@ sequenceDiagram
 ### 1.1 Turn Enforcement & Move Legality Validation (`ERROR` Branching)
 ---
 - **Active Turn Check (`OUT_OF_TURN`) :** 
-  - The server compares `player_id` against `active_turn`. Commands sent by the waiting client (`Player_2`) are rejected immediately with `ERROR` (`error_code: "OUT_OF_TURN"`, `retry_allowed: false`) without mutating state or interrupting `Player_1`'s 30-second turn clock.
+  - The server compares `player_id` against `active_turn`. Commands sent by the waiting client (`Player_2`) are rejected immediately with `ERROR` (`error_code: "OUT_OF_TURN"`, `retry_allowed: false`) without mutating state or interrupting `Player_1`'s 60-second turn clock.
 - **Move & Firing Legality (`INVALID_PARAMS` / `MOVE_ALREADY_USED`) :**
   - **`MOVE` Validation :** 
     - Requires `move_used == False`, `direction in ("LEFT", "RIGHT")`, `1 <= distance <= 5`, and target `x` within `0..79`. Violations return `ERROR` (`"MOVE_ALREADY_USED"` or `"INVALID_PARAMS"`, `retry_allowed: true`) to the active player without advancing the turn.
   - **`FIRE` Validation :** 
-    - Requires `0 <= angle <= 180` and `1 <= power <= 100`. Out-of-range values return `ERROR` (`"INVALID_PARAMS"`, `retry_allowed: true`) to the active player.
+    - Requires `0 <= angle <= 180` (forward-relative: `0–89` forward toward opponent, `90` straight up, `91–180` backward) and `1 <= power <= 100`. Out-of-range values return `ERROR` (`"INVALID_PARAMS"`, `retry_allowed: true`) to the active player.
 
 ### 1.2 State Mutation & Mid-Turn `MOVE` Broadcast
 ---
@@ -108,14 +120,16 @@ sequenceDiagram
 - **Synchronous Broadcast (`EVALUATE_MOVE` -> `PLAYER_TURN`) :** 
   - The server synchronously sends `STATE_UPDATE` (`action: "MOVE"`, `next_turn: "Player_1"`, `time_remaining`) to both `Player_1` and `Player_2`. Both clients redraw tank positions and HUD timers while `Player_1` retains turn control to `FIRE`.
 
-### 1.3 Ballistic Simulation, `STATE_UPDATE` Broadcast & Score Synchronization
+### 1.3 Ballistic Simulation, `STATE_UPDATE` Broadcast, Reconnection & Score Synchronization
 ---
 - **Physics & HP Evaluation (`PLAYER_TURN` -> `EVALUATE_MOVE`) :**
   - On a valid `FIRE`, the server simulates the projectile `trajectory` across `board_matrix`, records terrain `craters`, and deducts opponent HP (**25 HP** direct hit; **10 HP** shrapnel hit within 2 units).
 - **Win/Draw Evaluation & Turn Switch (`EVALUATE_MOVE` -> `CHECK_WIN_DRAW`) :**
   - **Match Continues (`HP > 0` and `round <= 20`) :** 
-    - The server synchronously broadcasts `STATE_UPDATE` (`action: "FIRE"`, `damage_dealt`, updated `tanks` HP, `next_turn: "Player_2"`, `time_remaining: 30`) to both clients to synchronize live scores, switches `active_turn = "Player_2"`, resets `move_used = False` and the 30s clock, and returns to `PLAYER_TURN`.
+    - The server synchronously broadcasts `STATE_UPDATE` (`action: "FIRE"`, `damage_dealt`, updated `tanks` HP, `next_turn: "Player_2"`, `time_remaining: 60`) so both clients animate the projectile arc and impact in place, followed immediately by a clean `STATE_UPDATE` (`action: "TURN_START"`, `trajectory: null`, `impact: null`, `next_turn: "Player_2"`, `time_remaining: 60`), switches `active_turn = "Player_2"`, resets `move_used = False` and the 60s clock, and returns to `PLAYER_TURN`.
   - **Match Ended (`HP <= 0` or `round > 20`) :** 
     - The server broadcasts the final `STATE_UPDATE` frame followed immediately by `GAME_OVER` (`winner`, `reason`, `final_scores`) to synchronize the final leaderboard on both clients before entering `CLEANUP`.
-  - **30-Second Turn Timeout (`TIMEOUT`) :** 
-    - If `turn_deadline` expires before `FIRE`, the server sends `ERROR` (`"TIMEOUT"`, `retry_allowed: false`) to the active player and broadcasts `STATE_UPDATE` (`action: "TIMEOUT"`, `next_turn: "Player_2"`, `time_remaining: 30`) to hand off the turn.
+  - **60-Second Turn Timeout (`TIMEOUT`) :** 
+    - If `turn_deadline` expires before `FIRE`, the server sends `ERROR` (`"TIMEOUT"`, `retry_allowed: false`) to the active player and broadcasts `STATE_UPDATE` (`action: "TIMEOUT"`, `next_turn: "Player_2"`, `time_remaining: 60`) to hand off the turn.
+  - **Temporary Disconnect & `STATE_RESUME` (60-Second Grace Period) :**
+    - If a client socket drops during an active match, the server marks the player `"TEMPORARILY_DISCONNECTED"`, holds match state for 60 seconds, and notifies the opponent with `STATE_UPDATE` (`action: "PLAYER_DISCONNECTED"`). When the player reconnects via `CONNECT` within 60 seconds, the server re-attaches the new socket and sends `STATE_RESUME` to both clients so the match resumes seamlessly without state loss.
