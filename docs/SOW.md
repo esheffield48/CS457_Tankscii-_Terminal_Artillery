@@ -145,9 +145,13 @@ stateDiagram-v2
 
 ## 4. Coding & AI Implementation Plan (Sprint 3)
 
-- **Permitted AI Tools:** [e.g., GitHub Copilot, ChatGPT, Claude]
-- **AI Prompting & Constraint Strategy:** Explain how you will constrain AI models to generate code (in Python or your chosen language) that adheres strictly to the protocol blueprint and FSM designed in Sprints 1 & 2.
-- **Implementation Risk Management:** Detail your plan to leverage past programming experience and manage time to ensure code completion on schedule.
+- **Permitted AI Tools:** 
+  - Google Antigravity
+- **AI Prompting & Constraint Strategy:** 
+  - I created a root `AGENTS.md` rule file alongside modular skills in `.agents/skills/` derived directly from the Sprint 1 & 2 specifications. This forces the agent to strictly obey newline-delimited JSON schemas, 8-state FSM transitions, single-threaded `selectors` concurrency model, and PEP 8 modularity rules before writing or modifying any code.
+- **Implementation Risk Management:** 
+  - **Verification & Quality:** Mitigate integration bugs by implementing an automated `unittest` suite, performing thorough manual code reviews, and testing multi-client gameplay and disconnect recovery locally before CML deployment.
+  - **Time Management:** Work consistently across incremental milestones and aim to finish early to leave ample buffer for debugging and network verification.
 
 ---
 
