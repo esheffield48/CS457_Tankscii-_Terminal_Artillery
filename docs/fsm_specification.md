@@ -22,6 +22,7 @@ stateDiagram-v2
     
     PLAYER_TURN --> EVALUATE_MOVE: Active Player Sends<br> MOVE or FIRE
 
+    EVALUATE_MOVE --> PLAYER_TURN: Valid MOVE (Send STATE_UPDATE)
     EVALUATE_MOVE --> CHECK_WIN_DRAW: Simulate Trajectory & Damage (Send STATE_UPDATE)
     
     CHECK_WIN_DRAW --> PLAYER_TURN: Both Tanks Alive & Round <= 20 (Switch Turn & Reset 30s Timer)

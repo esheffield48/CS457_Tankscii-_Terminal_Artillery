@@ -19,10 +19,10 @@
 The authoritative server manages every client socket through four lifecycle phases:
 
 #### **Phase 1** : Listening Socket `accept()` (`INIT` -> `WAITING_FOR_PLAYERS`)
-1. **Socket Creation :** 
-   - On startup, the server creates an IPv4 TCP listening socket (`socket.socket(socket.AF_INET, socket.SOCK_STREAM)`) and sets ` setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)` to allow immediate port rebinding during server restarts.
-2. **Non-Blocking Bind & Listen :** 
-   - The socket binds to the configured host/port, calls `listen(5)`, and is explicitly set to non-blocking mode via `listen_sock.setblocking(False)`.
+1. **CLI Port Validation & Socket Creation :** 
+   - On startup, `server.py` parses `-h` (help) and `-p <port>` (validating `1024 <= port <= 65535`), creates an IPv4 TCP listening socket (`socket.socket(socket.AF_INET, socket.SOCK_STREAM)`), and sets `setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)` to allow immediate port rebinding during server restarts.
+2. **Non-Blocking Bind (`0.0.0.0`) & Listen :** 
+   - The socket binds to all interfaces on the validated port via `listen_sock.bind(("0.0.0.0", port))`, calls `listen(5)`, and is explicitly set to non-blocking mode via `listen_sock.setblocking(False)`.
 3. **Selector Registration :** 
    - The listening socket is registered with the selector using `sel.register(listen_sock, selectors.EVENT_READ, data=None)`. The `data=None` parameter differentiates incoming connection requests on the listening socket from readable data events on established client sockets.
 4. **Accepting Connections (`accept_wrapper`) :** 

@@ -14,6 +14,7 @@ sequenceDiagram
     participant S as Authoritative Server (selectors Loop)
     participant P2 as Player 2 (Waiting Client)
 
+    Note over P1,P2: Pre-Match Handshake: Clients resolve server.sheffield.edu via socket.gethostbyname(), connect TCP,<br/>exchange CONNECT -> LOBBY_WAIT / GAME_START, and synchronize initial 80x24 board & tanks (P1: x=10, P2: x=70, 100 HP)
     Note over P1,P2: Server in [PLAYER_TURN] (active_turn = "Player_1", move_used = False, 30s turn clock running)
 
     rect rgb(45, 55, 72)

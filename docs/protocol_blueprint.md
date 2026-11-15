@@ -18,6 +18,17 @@
 - **Receiver Extraction Logic :**
   Each client session accumulates incoming non-blocking `recv(4096)` bytes into a per-client `stream_buffer` (`bytearray`). While a `\n` delimiter is present in `stream_buffer`, each complete UTF-8 line is extracted and deserialized into a JSON object, while any trailing partial frame bytes remain buffered until the next readable socket event.
 
+### 1.3 CLI Invocation & DNS Resolution :
+---
+- **Server Invocation (`server.py`) :**
+  - Parses `-h` (usage help) and `-p <port>` (required listening port in range `1024–65535`).
+  - Binds its IPv4 TCP listening socket (`socket.AF_INET`, `socket.SOCK_STREAM`) to `0.0.0.0`.
+- **Client Invocation (`client.py`) :**
+  - Parses `-h` (usage help), `-i <hostname_or_ip>` (required server DNS hostname or IP), and `-p <port>` (required server port in range `1024–65535`).
+- **Graceful DNS Resolution (`socket.gethostbyname`) :**
+  - The client resolves `-i <hostname_or_ip>` via `socket.gethostbyname()` without hardcoded IP addresses.
+  - Explicitly catches `socket.gaierror` if DNS resolution fails or the DNS server is unreachable, printing a user-friendly troubleshooting message (`'ip dns server'` / `'ip host'`) and exiting cleanly with status code `1` without a raw traceback.
+
 ## 2. Application Message Schema :
 
 ### 2.1 Message Framing Structure : 
