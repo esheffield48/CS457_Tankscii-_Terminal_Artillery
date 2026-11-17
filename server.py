@@ -12,18 +12,24 @@ from __future__ import annotations
 import argparse
 from collections.abc import Callable
 import copy
+import ipaddress
 import logging
 import math
 import random
 import selectors
 import socket
+import ssl
 import sys
 import time
 from typing import Any
 
 from tankscii import (
+    ALLOWED_SUBNET_CIDRS,
     DEFAULT_P1_NICKNAME,
     DEFAULT_P2_NICKNAME,
+    HANDSHAKE_TIMEOUT_SECONDS,
+    MAX_CONSECUTIVE_ERRORS,
+    MAX_FRAMES_PER_READ,
     MAX_PLAYERS,
     MAX_PORT,
     MAX_ROUNDS,
@@ -32,9 +38,11 @@ from tankscii import (
     TURN_DURATION_SECONDS,
 )
 from tankscii.framing import (
+    BufferOverflowError,
     ClientSession,
     ConnectionClosedError,
     FrameDecodeError,
+    create_tls_context,
     decode_json_line,
     receive_and_extract_raw_lines,
     send_frame_safely,
@@ -89,12 +97,44 @@ def parse_server_arguments(
         required=True,
         help=f"Listening TCP port ({MIN_PORT}-{MAX_PORT}).",
     )
+    parser.add_argument(
+        "-tls",
+        "--tls",
+        action="store_true",
+        default=False,
+        help="Enable opt-in TLS encryption (cleartext TCP is default for Wireshark).",
+    )
+    parser.add_argument(
+        "--cert",
+        default="cert.pem",
+        help="Path to server TLS certificate PEM file (used with -tls).",
+    )
+    parser.add_argument(
+        "--key",
+        default="key.pem",
+        help="Path to server TLS private key PEM file (used with -tls).",
+    )
 
     parsed_args = parser.parse_args(argv)
     if not (MIN_PORT <= parsed_args.port <= MAX_PORT):
         parser.error(f"Port must be between {MIN_PORT} and {MAX_PORT}.")
 
     return parsed_args
+
+
+def is_trusted_client_ip(
+    client_ip: str,
+    allowed_cidrs: tuple[str, ...] = ALLOWED_SUBNET_CIDRS,
+) -> bool:
+    """Return True if `client_ip` belongs to a trusted localhost or CML subnet."""
+    try:
+        parsed_ip = ipaddress.ip_address(client_ip)
+    except ValueError:
+        return False
+    return any(
+        parsed_ip in ipaddress.ip_network(cidr, strict=False)
+        for cidr in allowed_cidrs
+    )
 
 
 def configure_server_logging(
@@ -138,18 +178,11 @@ class TanksciiServer:
         clock_fn: Callable[[], float] = time.monotonic,
         first_turn_choice: str | None = None,
         logger: logging.Logger | None = None,
+        use_tls: bool = False,
+        tls_certfile: str | None = None,
+        tls_keyfile: str | None = None,
     ) -> None:
-        """Initialize the authoritative game server in the `INIT` FSM state.
-
-        Args:
-            port: Validated listening TCP port (`1024..65535`).
-            host: Interface address to bind (defaults to `"0.0.0.0"`).
-            selector: Optional custom selector instance for testing.
-            clock_fn: Monotonic clock callable returning seconds as `float`.
-            first_turn_choice: Optional deterministic starting player ID
-                (`"Player_1"` or `"Player_2"`) for testing.
-            logger: Optional `logging.Logger` instance for server diagnostics.
-        """
+        """Initialize the authoritative game server in the `INIT` FSM state."""
         self.host: str = host
         self.port: int = port
         self.selector: selectors.BaseSelector = (
@@ -161,6 +194,16 @@ class TanksciiServer:
             logger
             if logger is not None
             else logging.getLogger("tankscii.server")
+        )
+        self.use_tls: bool = use_tls
+        self.ssl_context: ssl.SSLContext | None = (
+            create_tls_context(
+                is_server=True,
+                certfile=tls_certfile,
+                keyfile=tls_keyfile,
+            )
+            if use_tls
+            else None
         )
         self.listen_sock: socket.socket | None = None
 
@@ -245,6 +288,32 @@ class TanksciiServer:
             Registered `ClientSession` when accepted into the lobby, or `None`
             when rejected due to full capacity.
         """
+        if not is_trusted_client_ip(client_addr[0]):
+            self.logger.warning(
+                "Rejected connection from untrusted IP %s:%d (outside allowed subnets).",
+                client_addr[0],
+                client_addr[1],
+            )
+            self._close_socket_safely(client_sock)
+            return None
+
+        if self.ssl_context is not None:
+            try:
+                client_sock = self.ssl_context.wrap_socket(
+                    client_sock,
+                    server_side=True,
+                    do_handshake_on_connect=False,
+                )
+            except (ssl.SSLError, OSError) as exc:
+                self.logger.warning(
+                    "TLS socket wrap failed for %s:%d: %s",
+                    client_addr[0],
+                    client_addr[1],
+                    exc,
+                )
+                self._close_socket_safely(client_sock)
+                return None
+
         client_sock.setblocking(False)
 
         has_disconnected_slot = self._has_temporarily_disconnected_player()
@@ -274,6 +343,7 @@ class TanksciiServer:
             sock=client_sock,
             addr=client_addr,
             stream_buffer=bytearray(),
+            connected_at=self.clock_fn(),
         )
         self.unassigned_sessions[id(session)] = session
         self.selector.register(client_sock, selectors.EVENT_READ, data=session)
@@ -345,8 +415,28 @@ class TanksciiServer:
                 if isinstance(session, ClientSession):
                     self.service_client_session(session)
 
-        # 2. Check turn timer expiration only after all readable sockets are processed.
+        # 2. Check turn timer and pre-handshake timeouts after servicing sockets.
+        self.check_handshake_timeouts()
         self.check_turn_timeout()
+
+    def check_handshake_timeouts(self) -> None:
+        """Close unauthenticated sockets that fail to send CONNECT within 15s."""
+        if not self.unassigned_sessions:
+            return
+        now = self.clock_fn()
+        expired_sessions = [
+            session
+            for session in self.unassigned_sessions.values()
+            if (now - session.connected_at) >= HANDSHAKE_TIMEOUT_SECONDS
+        ]
+        for session in expired_sessions:
+            self.logger.warning(
+                "Closing idle unauthenticated socket from %s:%d after %ds handshake timeout.",
+                session.addr[0],
+                session.addr[1],
+                HANDSHAKE_TIMEOUT_SECONDS,
+            )
+            self._unregister_and_close_session(session)
 
     def run_forever(self) -> None:
         """Initialize the listening socket and run the main event loop until interrupted."""
@@ -386,6 +476,24 @@ class TanksciiServer:
             raw_lines = receive_and_extract_raw_lines(
                 session.sock, session.stream_buffer
             )
+        except BufferOverflowError as exc:
+            self.logger.warning(
+                "Buffer overflow from %s:%d: %s",
+                session.addr[0],
+                session.addr[1],
+                exc,
+            )
+            overflow_error = build_error_message(
+                error_code="MALFORMED_FRAME",
+                detail=str(exc),
+                retry_allowed=False,
+            )
+            send_frame_safely(session.sock, overflow_error)
+            if session.player_id is not None:
+                self.handle_unexpected_disconnect(session)
+            else:
+                self._unregister_and_close_session(session)
+            return
         except (
             ConnectionClosedError,
             ConnectionResetError,
@@ -396,6 +504,16 @@ class TanksciiServer:
             self.handle_unexpected_disconnect(session)
             return
 
+        if len(raw_lines) > MAX_FRAMES_PER_READ:
+            self.logger.warning(
+                "Rate-limiting coalesced flood from %s:%d (%d > %d frames/read).",
+                session.addr[0],
+                session.addr[1],
+                len(raw_lines),
+                MAX_FRAMES_PER_READ,
+            )
+            raw_lines = raw_lines[:MAX_FRAMES_PER_READ]
+
         for raw_line in raw_lines:
             # Stop processing coalesced frames if a prior frame closed this session.
             if not self._is_session_registered(session):
@@ -404,6 +522,7 @@ class TanksciiServer:
             try:
                 frame = decode_json_line(raw_line)
             except FrameDecodeError as exc:
+                session.consecutive_errors += 1
                 retry_allowed = (
                     self.fsm_state == "PLAYER_TURN"
                     and session.player_id == self.active_turn
@@ -420,10 +539,14 @@ class TanksciiServer:
                     retry_allowed=retry_allowed,
                 )
                 send_frame_safely(session.sock, error_msg)
+                if session.consecutive_errors >= MAX_CONSECUTIVE_ERRORS:
+                    self._handle_error_flood_disconnect(session)
+                    break
                 continue
 
             is_valid_env, env_detail = validate_frame_envelope(frame)
             if not is_valid_env:
+                session.consecutive_errors += 1
                 retry_allowed = (
                     self.fsm_state == "PLAYER_TURN"
                     and session.player_id == self.active_turn
@@ -440,6 +563,9 @@ class TanksciiServer:
                     retry_allowed=retry_allowed,
                 )
                 send_frame_safely(session.sock, error_msg)
+                if session.consecutive_errors >= MAX_CONSECUTIVE_ERRORS:
+                    self._handle_error_flood_disconnect(session)
+                    break
                 continue
 
             if (
@@ -448,7 +574,21 @@ class TanksciiServer:
             ):
                 session = self.clients[session.player_id]
 
+            session.consecutive_errors = 0
             self.dispatch_client_frame(session, frame)
+
+    def _handle_error_flood_disconnect(self, session: ClientSession) -> None:
+        """Disconnect a client that exceeds `MAX_CONSECUTIVE_ERRORS`."""
+        self.logger.warning(
+            "Disconnecting %s:%d after %d consecutive invalid frames.",
+            session.addr[0],
+            session.addr[1],
+            session.consecutive_errors,
+        )
+        if session.player_id is not None:
+            self.handle_unexpected_disconnect(session)
+        else:
+            self._unregister_and_close_session(session)
 
     def dispatch_client_frame(
         self,
@@ -465,6 +605,29 @@ class TanksciiServer:
 
         if msg_type == "CONNECT":
             self.handle_connect_frame(session, frame)
+            return
+
+        # Enforce Socket-to-Identity Binding: never trust a spoofed JSON header.
+        if (
+            session.player_id is not None
+            and frame["player_id"] != session.player_id
+        ):
+            self.logger.warning(
+                "Rejected spoofed player_id=%r from authenticated %s (%s:%d).",
+                frame["player_id"],
+                session.player_id,
+                session.addr[0],
+                session.addr[1],
+            )
+            spoof_error = build_error_message(
+                error_code="OUT_OF_TURN",
+                detail=(
+                    f"Header player_id '{frame['player_id']}' does not match "
+                    f"authenticated session '{session.player_id}'."
+                ),
+                retry_allowed=False,
+            )
+            send_frame_safely(session.sock, spoof_error)
             return
 
         if msg_type == "DISCONNECT":
@@ -695,6 +858,29 @@ class TanksciiServer:
                 retry_allowed=False,
             )
             send_frame_safely(session.sock, lobby_full_error)
+            self._unregister_and_close_session(session)
+            return
+
+        # Attack Surface 3: Source-IP Reconnection Pinning prevents cross-subnet
+        # session hijacking during the 60-second TEMPORARILY_DISCONNECTED window.
+        if session.addr[0] != matched_session.addr[0]:
+            self.logger.warning(
+                "Rejected reconnect hijack attempt for %s ('%s'): "
+                "source IP %s != original IP %s.",
+                matched_session.player_id,
+                matched_session.nickname,
+                session.addr[0],
+                matched_session.addr[0],
+            )
+            hijack_error = build_error_message(
+                error_code="LOBBY_FULL",
+                detail=(
+                    "Reconnection denied: source IP does not match "
+                    "disconnected player session."
+                ),
+                retry_allowed=False,
+            )
+            send_frame_safely(session.sock, hijack_error)
             self._unregister_and_close_session(session)
             return
 
@@ -1668,7 +1854,14 @@ def main(argv: list[str] | None = None) -> int:
     """CLI entrypoint for the authoritative Tankscii server."""
     args = parse_server_arguments(argv)
     logger = configure_server_logging()
-    server = TanksciiServer(port=args.port, host="0.0.0.0", logger=logger)
+    server = TanksciiServer(
+        port=args.port,
+        host="0.0.0.0",
+        logger=logger,
+        use_tls=args.tls,
+        tls_certfile=args.cert if args.tls else None,
+        tls_keyfile=args.key if args.tls else None,
+    )
     server.initialize_listening_socket()
     server.run_forever()
     return 0

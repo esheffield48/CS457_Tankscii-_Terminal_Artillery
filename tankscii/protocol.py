@@ -8,11 +8,20 @@ specified in `docs/protocol_blueprint.md`.
 
 from __future__ import annotations
 
+import hashlib
+import hmac
+import json
+import os
 import re
 import time
 from typing import Any
 
-from tankscii import DEFAULT_CLIENT_VERSION, TURN_DURATION_SECONDS
+from tankscii import (
+    DEFAULT_CLIENT_VERSION,
+    DEFAULT_HMAC_SECRET,
+    MAX_CLOCK_SKEW_SECONDS,
+    TURN_DURATION_SECONDS,
+)
 
 CANONICAL_MESSAGE_TYPES: frozenset[str] = frozenset(
     {
@@ -65,29 +74,89 @@ def _is_strict_int(value: Any) -> bool:
     return isinstance(value, int) and not isinstance(value, bool)
 
 
+def get_hmac_secret() -> bytes:
+    """Return the active HMAC-SHA256 shared secret.
+
+    Reads `TANKSCII_HMAC_SECRET` from the environment for out-of-band secrecy
+    on CML nodes, falling back to `DEFAULT_HMAC_SECRET` when unset for zero-config
+    local testing.
+    """
+    env_secret = os.environ.get("TANKSCII_HMAC_SECRET")
+    if env_secret:
+        return env_secret.encode("utf-8")
+    return DEFAULT_HMAC_SECRET
+
+
+def compute_frame_hmac(
+    msg_type: str,
+    player_id: str,
+    timestamp: int,
+    payload: dict[str, Any],
+    secret: bytes | None = None,
+) -> str:
+    """Compute a deterministic HMAC-SHA256 hex digest for a Tankscii frame."""
+    key = get_hmac_secret() if secret is None else secret
+    canonical_body = json.dumps(
+        {
+            "msg_type": msg_type,
+            "player_id": player_id,
+            "timestamp": timestamp,
+            "payload": payload,
+        },
+        sort_keys=True,
+        separators=(",", ":"),
+    ).encode("utf-8")
+    return hmac.new(key, canonical_body, hashlib.sha256).hexdigest()
+
+
+def verify_frame_hmac(
+    frame: dict[str, Any],
+    secret: bytes | None = None,
+) -> bool:
+    """Verify a frame's `"hmac"` digest using constant-time comparison."""
+    received_hmac = frame.get("hmac")
+    if not isinstance(received_hmac, str) or not received_hmac:
+        return False
+    expected_hmac = compute_frame_hmac(
+        msg_type=frame["msg_type"],
+        player_id=frame["player_id"],
+        timestamp=frame["timestamp"],
+        payload=frame["payload"],
+        secret=secret,
+    )
+    return hmac.compare_digest(expected_hmac, received_hmac)
+
+
 def build_message_envelope(
     msg_type: str,
     player_id: str,
     payload: dict[str, Any],
     timestamp: int | None = None,
 ) -> dict[str, Any]:
-    """Construct a canonical 4-key Tankscii message envelope.
+    """Construct a canonical Tankscii message envelope with cleartext HMAC-SHA256.
 
     Args:
-        msg_type: One of the 9 canonical message type strings.
+        msg_type: One of the canonical message type strings.
         player_id: Sender identifier (`"Player_1"`, `"Player_2"`, or `"SERVER"`).
         payload: Message-specific dictionary body.
         timestamp: Optional UNIX epoch timestamp in seconds; defaults to current
             epoch time (`int(time.time())`).
 
     Returns:
-        Dictionary containing `msg_type`, `player_id`, `timestamp`, and `payload`.
+        Dictionary containing `msg_type`, `player_id`, `timestamp`, `hmac`, and `payload`.
     """
     effective_timestamp = int(time.time()) if timestamp is None else timestamp
+    signature = compute_frame_hmac(
+        msg_type=msg_type,
+        player_id=player_id,
+        timestamp=effective_timestamp,
+        payload=payload,
+    )
     return {
         "msg_type": msg_type,
         "player_id": player_id,
         "timestamp": effective_timestamp,
+        "hmac": signature,
         "payload": payload,
     }
 
@@ -279,15 +348,27 @@ def build_game_over_message(
     return build_message_envelope("GAME_OVER", "SERVER", payload, timestamp)
 
 
-def validate_frame_envelope(frame: Any) -> tuple[bool, str]:
-    """Validate that a parsed JSON object conforms to the universal 4-key envelope.
+def validate_frame_envelope(
+    frame: Any,
+    require_hmac: bool = False,
+    current_epoch: int | None = None,
+    max_clock_skew_seconds: int = MAX_CLOCK_SKEW_SECONDS,
+    hmac_secret: bytes | None = None,
+) -> tuple[bool, str]:
+    """Validate that a parsed JSON object conforms to the universal envelope.
 
-    Checks that `frame` is a `dict` containing `"msg_type"` (str in the 9
-    canonical types), `"player_id"` (`"Player_1"`, `"Player_2"`, or `"SERVER"`),
+    Checks that `frame` is a `dict` containing `"msg_type"`, `"player_id"`,
     `"timestamp"` (strict `int`, not `bool`), and `"payload"` (`dict`).
+    When `"hmac"` is present (or `require_hmac=True`), verifies the HMAC-SHA256
+    signature using constant-time comparison. When `current_epoch` is provided,
+    enforces the timestamp replay window (`<= max_clock_skew_seconds`).
 
     Args:
         frame: Deserialized JSON value to inspect.
+        require_hmac: When True, rejects frames that omit `"hmac"`.
+        current_epoch: Optional reference UNIX epoch timestamp for replay checks.
+        max_clock_skew_seconds: Maximum allowed `|current_epoch - timestamp|`.
+        hmac_secret: Optional secret override for testing.
 
     Returns:
         Tuple of `(is_valid, detail_message)`.
@@ -317,6 +398,18 @@ def validate_frame_envelope(frame: Any) -> tuple[bool, str]:
     if not isinstance(payload, dict):
         return False, "Field 'payload' must be a JSON object."
 
+    if "hmac" in frame or require_hmac:
+        if not verify_frame_hmac(frame, secret=hmac_secret):
+            return False, "Invalid or missing frame HMAC signature."
+
+    if current_epoch is not None:
+        if abs(current_epoch - timestamp) > max_clock_skew_seconds:
+            return (
+                False,
+                f"Frame timestamp {timestamp} outside allowed replay window "
+                f"(+/-{max_clock_skew_seconds}s).",
+            )
+
     return True, "Valid envelope."
 
 
@@ -324,6 +417,9 @@ def validate_connect_payload(
     payload: dict[str, Any],
 ) -> tuple[bool, str, str, bool]:
     """Validate a `CONNECT` message payload (`nickname` and `client_version`).
+
+    Enforces printable ASCII (`0x20-0x7E`) on `nickname` to prevent ANSI
+    escape sequence and control-character injection into terminal UIs.
 
     Args:
         payload: The `"payload"` dictionary from a `CONNECT` frame.
@@ -341,6 +437,14 @@ def validate_connect_payload(
             "INVALID_PARAMS",
             "Field 'nickname' must be a string (1-16 characters).",
             False,
+        )
+
+    if any(ord(ch) < 32 or ord(ch) > 126 for ch in nickname):
+        return (
+            False,
+            "INVALID_PARAMS",
+            "Field 'nickname' must contain printable ASCII characters only.",
+            True,
         )
 
     stripped_nickname = nickname.strip()

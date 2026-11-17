@@ -28,12 +28,12 @@ Follow these exact state transitions and concurrency rules from `docs/fsm_specif
 3. **Client 1 `CONNECT`**: Store `clients["Player_1"] = session`, send `LOBBY_WAIT` (`assigned_id: "Player_1"`), remain in `WAITING_FOR_PLAYERS`.
    - If `Player_1` disconnects (0-byte EOF or socket error) before `Player_2` joins: unregister, close socket, `clients.clear()`, stay in `WAITING_FOR_PLAYERS`.
 4. **Client 2 `CONNECT`**: Store `clients["Player_2"] = session`, transition to `GAME_START`.
-5. Initialize `board_matrix` (`80x24`), `terrain_heights` (length 80), spawn `Player_1` (`x=10, hp=100`) and `Player_2` (`x=70, hp=100`), randomly pick `first_turn`, set `round = 1`, `move_used = False`, `turn_deadline = time.monotonic() + 30.0`.
+5. Initialize `board_matrix` (`80x24`), `terrain_heights` (length 80), spawn `Player_1` (`x=10, hp=100`) and `Player_2` (`x=70, hp=100`), randomly pick `first_turn`, set `round = 1`, `move_used = False`, `turn_deadline = time.monotonic() + 60.0`.
 6. Send individualized `GAME_START` frames to both clients and transition to `PLAYER_TURN`.
 
 ### Phase 3: Active Match Loop (`PLAYER_TURN` <-> `EVALUATE_MOVE` <-> `CHECK_WIN_DRAW`)
 1. **Dynamic Selector Timeout & Race Ordering**:
-   - In `PLAYER_TURN`, compute `timeout = max(0.0, turn_deadline - time.monotonic())`.
+   - In `PLAYER_TURN`, compute `timeout = max(0.0, turn_deadline - time.monotonic())` (or `disconnect_deadline - time.monotonic()` while a player is `TEMPORARILY_DISCONNECTED`).
    - Always process all readable socket events from `sel.select(timeout)` **before** checking `time.monotonic() >= turn_deadline` (prevents Race 1 where an arriving `FIRE` packet races with timer expiration).
 2. **Turn Enforcement**:
    - If `frame["player_id"] != active_turn`, immediately send `ERROR ("OUT_OF_TURN", retry_allowed=False)` to sender. Leave `turn_deadline` and state untouched.
@@ -46,15 +46,17 @@ Follow these exact state transitions and concurrency rules from `docs/fsm_specif
    - Transition `PLAYER_TURN` -> `EVALUATE_MOVE`. Simulate ballistic trajectory across `board_matrix`, record crater in `craters`, calculate damage (**25 HP** direct hit; **10 HP** shrapnel hit within 2 distance units), and deduct tank HP (clamped to `>= 0`).
    - Transition `EVALUATE_MOVE` -> `CHECK_WIN_DRAW`:
      - If any tank `hp <= 0` or `round > 20` (after completing the round): broadcast final `STATE_UPDATE (action="FIRE")` followed immediately by `GAME_OVER` (`winner`: `"Player_1" | "Player_2" | "DRAW"`, `reason`: `"HP_ELIMINATION" | "ROUND_LIMIT"`), then transition to `CLEANUP`.
-     - Otherwise: switch `active_turn` to opponent, reset `move_used = False`, reset `turn_deadline = time.monotonic() + 30.0`, increment `round` after both players have completed their turns in the round, broadcast `STATE_UPDATE (action="FIRE", next_turn=active_turn, time_remaining=30)`, and transition to `PLAYER_TURN`.
-5. **30-Second Turn Timeout**:
-   - When `time.monotonic() >= turn_deadline` in `PLAYER_TURN`: send `ERROR ("TIMEOUT", retry_allowed=False)` to `active_turn`, flip `active_turn` to opponent, reset `move_used = False` and `turn_deadline = time.monotonic() + 30.0`, broadcast `STATE_UPDATE (action="TIMEOUT", next_turn=active_turn, time_remaining=30)`, and remain in `PLAYER_TURN`.
+     - Otherwise: switch `active_turn` to opponent, reset `move_used = False`, reset `turn_deadline = time.monotonic() + 60.0`, increment `round` after both players have completed their turns in the round, broadcast `STATE_UPDATE (action="FIRE", next_turn=active_turn, time_remaining=60)` followed by a clean `STATE_UPDATE (action="TURN_START", trajectory=None, impact=None)`, and transition to `PLAYER_TURN`.
+5. **60-Second Turn Timeout**:
+   - When `time.monotonic() >= turn_deadline` in `PLAYER_TURN`: send `ERROR ("TIMEOUT", retry_allowed=False)` to `active_turn`, flip `active_turn` to opponent, reset `move_used = False` and `turn_deadline = time.monotonic() + 60.0`, broadcast `STATE_UPDATE (action="TIMEOUT", next_turn=active_turn, time_remaining=60)`, and remain in `PLAYER_TURN`.
 
-### Phase 4: Disconnections & `CLEANUP` -> `WAITING_FOR_PLAYERS`
+### Phase 4: Disconnections, 60s State Preservation & `CLEANUP` -> `WAITING_FOR_PLAYERS`
 1. **Snapshot Broadcast Isolation**:
    - Iterate over `list(clients.items())`. Wrap each `sendall()` in `try/except (ConnectionResetError, BrokenPipeError, TimeoutError, OSError)`, collecting failed IDs in `disconnected_ids` and handling them *after* the broadcast loop completes.
-2. **Mid-Game Disconnect / Forfeit**:
-   - If a client sends `DISCONNECT` (`"FORFEIT"` or `"USER_QUIT"`), triggers 0-byte EOF, or raises a socket exception during `PLAYER_TURN` or `EVALUATE_MOVE`: transition to `GAME_OVER`, send `GAME_OVER` to the surviving client (`winner = survivor`, `reason = "FORFEIT"` for `DISCONNECT` frame or `"DISCONNECT"` for EOF/RST), and transition to `CLEANUP`.
+2. **Mid-Game State Preservation, Reconnection & Forfeit**:
+   - Explicit `DISCONNECT` (`reason = "FORFEIT"`): transition immediately to `GAME_OVER (reason="FORFEIT")` and `CLEANUP`.
+   - Unexpected socket drop (`0-byte EOF`, `ConnectionResetError`, `BrokenPipeError`) or `DISCONNECT (reason="USER_QUIT")` during an active match: close only the dropped socket, mark the session `connection_status = "TEMPORARILY_DISCONNECTED"` with `disconnect_deadline = time.monotonic() + 60.0`, preserve all match state, and notify the opponent with `STATE_UPDATE (action="PLAYER_DISCONNECTED")`.
+   - When the returning player reconnects via `CONNECT` within 60s using their nickname/alias or ID, re-attach the new socket and send `STATE_RESUME` to both clients. If the 60s grace period expires, award `GAME_OVER (reason="DISCONNECT")` to the survivor and enter `CLEANUP`.
 3. **`CLEANUP` State**:
    - Unregister (`sel.unregister(sock)`) and close (`sock.close()`) all client sockets safely.
    - Clear `clients`, reset `board_matrix`, `tanks`, `craters`, `round = 1`, `move_used = False`, and transition to `WAITING_FOR_PLAYERS`.

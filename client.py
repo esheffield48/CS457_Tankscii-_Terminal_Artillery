@@ -27,6 +27,7 @@ from tankscii import (
 from tankscii.framing import (
     ConnectionClosedError,
     FrameDecodeError,
+    create_tls_context,
     decode_json_line,
     receive_and_extract_raw_lines,
     send_frame_safely,
@@ -107,6 +108,18 @@ def parse_client_arguments(
         default=None,
         metavar="<nickname>",
         help="Optional player nickname (1-16 chars); prompts interactively if omitted.",
+    )
+    parser.add_argument(
+        "-tls",
+        "--tls",
+        action="store_true",
+        default=False,
+        help="Enable opt-in TLS encryption (cleartext TCP is default for Wireshark).",
+    )
+    parser.add_argument(
+        "--cert",
+        default="cert.pem",
+        help="Path to trusted server TLS certificate PEM file (used with -tls).",
     )
 
     args = parser.parse_args(argv)
@@ -280,6 +293,8 @@ class TanksciiClient:
         selector: selectors.BaseSelector | None = None,
         use_color: bool | None = None,
         scanline_delay: float | None = None,
+        use_tls: bool = False,
+        tls_certfile: str | None = None,
     ) -> None:
         """Initialize the client with target server address and optional commands.
 
@@ -331,6 +346,8 @@ class TanksciiClient:
             DEFAULT_SECTION_PAUSE if (self.scanline_delay > 0.0) else 0.0
         )
         self.tutorial_shown: bool = False
+        self.use_tls: bool = use_tls
+        self.tls_certfile: str | None = tls_certfile
 
         self.sock: socket.socket | None = None
         self.selector: selectors.BaseSelector = (
@@ -375,6 +392,15 @@ class TanksciiClient:
         tcp_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
         try:
             tcp_socket.connect((server_ip, self.port))
+            if self.use_tls:
+                tls_context = create_tls_context(
+                    is_server=False,
+                    certfile=self.tls_certfile,
+                )
+                tcp_socket = tls_context.wrap_socket(
+                    tcp_socket,
+                    server_hostname=self.hostname,
+                )
         except (ConnectionRefusedError, TimeoutError, OSError) as exc:
             tcp_socket.close()
             print(
@@ -948,6 +974,8 @@ def main(argv: list[str] | None = None) -> int:
         hostname=args.hostname,
         port=args.port,
         nickname=args.nickname,
+        use_tls=args.tls,
+        tls_certfile=args.cert if args.tls else None,
     )
     client.connect_to_server()
     client.run_client_loop()

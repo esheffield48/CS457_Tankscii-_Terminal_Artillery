@@ -13,10 +13,12 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 import json
+import os
 import socket
+import ssl
 from typing import Any
 
-from tankscii import RECV_BUFFER_SIZE
+from tankscii import MAX_BUFFER_BYTES, RECV_BUFFER_SIZE
 
 
 class ConnectionClosedError(Exception):
@@ -25,6 +27,10 @@ class ConnectionClosedError(Exception):
 
 class FrameDecodeError(Exception):
     """Raised when a raw newline-delimited frame fails UTF-8 or JSON decoding."""
+
+
+class BufferOverflowError(FrameDecodeError):
+    """Raised when `stream_buffer` exceeds `MAX_BUFFER_BYTES` without `\\n`."""
 
 
 @dataclass
@@ -42,6 +48,8 @@ class ClientSession:
             `"TEMPORARILY_DISCONNECTED"`).
         disconnect_deadline: Monotonic deadline timestamp for the 60-second
             reconnection grace period when temporarily disconnected, or None.
+        connected_at: Monotonic timestamp when the TCP socket was accepted.
+        consecutive_errors: Count of consecutive invalid frames received.
     """
 
     sock: socket.socket
@@ -51,6 +59,8 @@ class ClientSession:
     nickname: str = ""
     connection_status: str = "CONNECTED"
     disconnect_deadline: float | None = None
+    connected_at: float = 0.0
+    consecutive_errors: int = 0
 
 
 def serialize_frame(message: dict[str, Any]) -> bytes:
@@ -67,21 +77,30 @@ def serialize_frame(message: dict[str, Any]) -> bytes:
 
 
 def append_and_extract_lines(
-    stream_buffer: bytearray, incoming_chunk: bytes
+    stream_buffer: bytearray,
+    incoming_chunk: bytes,
+    max_buffer_bytes: int = MAX_BUFFER_BYTES,
 ) -> list[bytes]:
     """Append incoming TCP bytes and extract all complete `\\n`-delimited lines.
 
     Partitioning on `b"\\n"` in a loop handles both TCP stream fragmentation
     (retaining trailing partial bytes in `stream_buffer` until the next read)
     and TCP packet coalescing (extracting multiple back-to-back frames from a
-    single `recv()` chunk).
+    single `recv()` chunk). Enforces `max_buffer_bytes` to prevent memory
+    exhaustion DoS from unbounded streams lacking a newline delimiter.
 
     Args:
         stream_buffer: Mutable per-session `bytearray` accumulator.
         incoming_chunk: Newly read raw bytes from the TCP socket.
+        max_buffer_bytes: Maximum permitted bytes in `stream_buffer` prior to
+            finding a complete newline-delimited frame.
 
     Returns:
         A list of complete raw byte lines (excluding the trailing `\\n`).
+
+    Raises:
+        BufferOverflowError: If `stream_buffer` exceeds `max_buffer_bytes`
+            without containing a `\\n` delimiter.
     """
     if incoming_chunk:
         stream_buffer.extend(incoming_chunk)
@@ -91,9 +110,24 @@ def append_and_extract_lines(
     while b"\n" in stream_buffer:
         raw_line, _, remainder = stream_buffer.partition(b"\n")
         stream_buffer[:] = remainder
+        if len(raw_line) > max_buffer_bytes:
+            raise BufferOverflowError(
+                f"Frame exceeds maximum allowed size ({max_buffer_bytes} bytes)."
+            )
         complete_lines.append(bytes(raw_line))
 
+    if len(stream_buffer) > max_buffer_bytes:
+        stream_buffer.clear()
+        raise BufferOverflowError(
+            f"Stream buffer exceeded {max_buffer_bytes} bytes without newline."
+        )
+
     return complete_lines
+
+
+def _reject_non_finite_constant(constant_name: str) -> Any:
+    """Reject non-standard JSON constants (`NaN`, `Infinity`, `-Infinity`)."""
+    raise ValueError(f"Non-finite JSON constant not permitted: {constant_name!r}")
 
 
 def decode_json_line(raw_line: bytes) -> dict[str, Any]:
@@ -107,7 +141,8 @@ def decode_json_line(raw_line: bytes) -> dict[str, Any]:
 
     Raises:
         FrameDecodeError: If the line is empty, contains invalid UTF-8 bytes,
-            has invalid JSON syntax, or does not decode to a JSON object (`dict`).
+            has invalid JSON syntax, contains `NaN`/`Infinity`, exceeds Python's
+            recursion limit, or does not decode to a JSON object (`dict`).
     """
     if not raw_line or not raw_line.strip():
         raise FrameDecodeError("Empty frame received.")
@@ -118,14 +153,42 @@ def decode_json_line(raw_line: bytes) -> dict[str, Any]:
         raise FrameDecodeError(f"Invalid UTF-8 encoding in frame: {exc}") from exc
 
     try:
-        parsed_object = json.loads(decoded_text)
-    except json.JSONDecodeError as exc:
+        parsed_object = json.loads(
+            decoded_text,
+            parse_constant=_reject_non_finite_constant,
+        )
+    except (json.JSONDecodeError, ValueError, RecursionError) as exc:
         raise FrameDecodeError(f"Malformed JSON syntax in frame: {exc}") from exc
 
     if not isinstance(parsed_object, dict):
         raise FrameDecodeError("Frame root must be a JSON object (dict).")
 
     return parsed_object
+
+
+def create_tls_context(
+    is_server: bool,
+    certfile: str | None = None,
+    keyfile: str | None = None,
+) -> ssl.SSLContext:
+    """Create a standard-library `ssl.SSLContext` for optional `-tls` mode.
+
+    Supports `SSLKEYLOGFILE` environment export so Wireshark can decrypt TLS
+    captures when troubleshooting or grading.
+    """
+    purpose = (
+        ssl.PROTOCOL_TLS_SERVER if is_server else ssl.PROTOCOL_TLS_CLIENT
+    )
+    context = ssl.SSLContext(purpose)
+    if certfile:
+        if is_server:
+            context.load_cert_chain(certfile=certfile, keyfile=keyfile)
+        else:
+            context.load_verify_locations(cafile=certfile)
+    keylog_path = os.environ.get("SSLKEYLOGFILE")
+    if keylog_path:
+        context.keylog_filename = keylog_path
+    return context
 
 
 def receive_and_extract_raw_lines(
@@ -149,13 +212,13 @@ def receive_and_extract_raw_lines(
         List of complete `\\n`-delimited raw byte frames extracted so far.
 
     Raises:
-        ConnectionClosedError: On 0-byte EOF or fatal socket read errors
-            (`ConnectionResetError`, `BrokenPipeError`, `TimeoutError`, `OSError`).
+        ConnectionClosedError: On 0-byte EOF or fatal socket read errors.
+        BufferOverflowError: If `stream_buffer` exceeds `MAX_BUFFER_BYTES`.
     """
     try:
         incoming_chunk = sock.recv(buffer_size)
-    except BlockingIOError:
-        # Non-blocking socket has no bytes ready right now; try again next tick.
+    except (BlockingIOError, ssl.SSLWantReadError, ssl.SSLWantWriteError):
+        # Non-blocking socket (or TLS record) has no complete bytes ready yet.
         return []
     except (ConnectionResetError, BrokenPipeError, TimeoutError, OSError) as exc:
         raise ConnectionClosedError(f"Socket read error: {exc}") from exc
@@ -171,8 +234,8 @@ def send_frame_safely(sock: socket.socket, message: dict[str, Any]) -> bool:
     """Serialize and transmit a JSON frame over TCP without raising socket errors.
 
     Wraps `sock.sendall()` in a `try/except` block catching `ConnectionResetError`,
-    `BrokenPipeError`, `TimeoutError`, and `OSError` so that an abrupt client drop
-    never crashes the server or client event loop.
+    `BrokenPipeError`, `TimeoutError`, `ssl.SSLError`, and `OSError` so that an
+    abrupt client drop never crashes the server or client event loop.
 
     Args:
         sock: Target TCP socket.
@@ -186,5 +249,11 @@ def send_frame_safely(sock: socket.socket, message: dict[str, Any]) -> bool:
     try:
         sock.sendall(encoded_frame)
         return True
-    except (ConnectionResetError, BrokenPipeError, TimeoutError, OSError):
+    except (
+        ConnectionResetError,
+        BrokenPipeError,
+        TimeoutError,
+        ssl.SSLError,
+        OSError,
+    ):
         return False
